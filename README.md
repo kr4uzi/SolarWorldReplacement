@@ -105,6 +105,32 @@ The application provides the following JSON API endpoints:
 
 All data endpoints return inverter-specific values as `wr0`, `wr1`, `wr2`, etc. (dynamically based on inverter count).
 
+## Zero-Day Detection & Alerts
+
+`zero_day_check.php` monitors production and sends a warning when something looks wrong. It checks yesterday's entries in `data/days.csv` and detects:
+
+- **Zero day**: the whole plant produced less than a configurable threshold (default: 100 Wh)
+- **Inverter fault**: a single inverter reported 0 Wh while the rest of the plant produced normally
+- **Logger offline**: no new data has been uploaded for N days (default: 2), or `days.csv` is missing entirely
+
+Alerts are sent via **email** (PHP's built-in `mail()`) and/or **Telegram** (plain HTTPS call) - no external libraries required. Each alert is sent only once (tracked in `data/zero_day_state.json`), so the script can safely run as often as you like.
+
+### Setup
+
+1. Open `zero_day_check.php` and edit the `$config` block at the top:
+   - `notify_email` - your email address (leave empty to disable email)
+   - `telegram_bot_token` / `telegram_chat_id` - optional Telegram alerts (setup steps are documented in the file)
+   - `min_day_wh` / `max_data_age_days` - detection thresholds
+2. Schedule a daily run, either via cron:
+   ```bash
+   15 6 * * * php /path/to/pv/zero_day_check.php
+   ```
+   or, on shared hosting without cron access, set `http_key` to a secret and use a web-cron service to call:
+   ```
+   https://example.com/pv/zero_day_check.php?key=YOUR_SECRET
+   ```
+   (HTTP access is denied unless the key matches; with an empty `http_key`, the script runs via CLI only.)
+
 ## Technology Stack
 
 - **Backend**: PHP (server-side only)
