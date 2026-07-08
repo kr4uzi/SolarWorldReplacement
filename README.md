@@ -113,13 +113,12 @@ All data endpoints return inverter-specific values as `wr0`, `wr1`, `wr2`, etc. 
 - **Inverter fault**: a single inverter reported 0 Wh while the rest of the plant produced normally
 - **Logger offline**: no new data has been uploaded for N days (default: 2), or `days.csv` is missing entirely
 
-Alerts are sent via **email** (PHP's built-in `mail()`) and/or **Telegram** (plain HTTPS call) - no external libraries required. Each alert is sent only once (tracked in `data/zero_day_state.json`), so the script can safely run as often as you like.
+Alerts are sent via **email** using PHP's built-in `mail()` - no external libraries required. Each alert is sent only once (tracked in `data/zero_day_state.json`), so the script can safely run as often as you like.
 
 ### Setup
 
 1. Open `zero_day_check.php` and edit the `$config` block at the top:
-   - `notify_email` - your email address (leave empty to disable email)
-   - `telegram_bot_token` / `telegram_chat_id` - optional Telegram alerts (setup steps are documented in the file)
+   - `notify_email` - the email address to receive warnings
    - `min_day_wh` / `max_data_age_days` - detection thresholds
 2. Schedule a daily run, either via cron:
    ```bash

@@ -4,10 +4,9 @@
  *
  * Detects "zero days" - days where the whole plant or a single inverter
  * reported (almost) no energy production, or where the data logger stopped
- * uploading data - and sends a warning via email and/or Telegram.
+ * uploading data - and sends a warning via email.
  *
- * No external libraries required: email uses PHP's built-in mail(),
- * Telegram uses a plain HTTPS call via file_get_contents().
+ * No external libraries required: email uses PHP's built-in mail().
  *
  * Run once per day (after the day is complete), either via cron:
  *     15 6 * * * php /path/to/pv/zero_day_check.php
@@ -31,17 +30,9 @@ $config = [
     // the logger has probably stopped uploading -> alert.
     'max_data_age_days' => 2,
 
-    // --- Notification: email (leave empty to disable) ---
+    // --- Notification: email ---
     'notify_email' => '',           // e.g. 'me@example.com'
     'from_email'   => '',           // optional From: header, e.g. 'pv@example.com'
-
-    // --- Notification: Telegram (leave empty to disable) ---
-    // 1. Chat with @BotFather, send /newbot -> you get the bot token.
-    // 2. Send any message to your new bot from your phone.
-    // 3. Open https://api.telegram.org/bot<TOKEN>/getUpdates in a browser
-    //    and read your numeric chat id from the response.
-    'telegram_bot_token' => '',     // e.g. '123456:ABC-DEF...'
-    'telegram_chat_id'   => '',     // e.g. '987654321'
 
     // Secret key required when the script is called via HTTP (web-cron).
     // Leave empty to allow CLI execution only.
@@ -107,32 +98,11 @@ function inverterName(string $dataDir, int $index): string
 
 function sendAlert(array $config, string $subject, string $message): bool
 {
-    $sent = false;
-
-    if ($config['notify_email'] !== '') {
-        $headers = $config['from_email'] !== '' ? 'From: ' . $config['from_email'] : '';
-        if (mail($config['notify_email'], $subject, $message, $headers)) {
-            $sent = true;
-        }
+    if ($config['notify_email'] === '') {
+        return false;
     }
-
-    if ($config['telegram_bot_token'] !== '' && $config['telegram_chat_id'] !== '') {
-        $context = stream_context_create(['http' => [
-            'method'  => 'POST',
-            'header'  => 'Content-Type: application/x-www-form-urlencoded',
-            'content' => http_build_query([
-                'chat_id' => $config['telegram_chat_id'],
-                'text'    => $subject . "\n" . $message,
-            ]),
-            'timeout' => 10,
-        ]]);
-        $url = 'https://api.telegram.org/bot' . $config['telegram_bot_token'] . '/sendMessage';
-        if (file_get_contents($url, false, $context) !== false) {
-            $sent = true;
-        }
-    }
-
-    return $sent;
+    $headers = $config['from_email'] !== '' ? 'From: ' . $config['from_email'] : '';
+    return mail($config['notify_email'], $subject, $message, $headers);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +167,7 @@ foreach ($alerts as $key => $message) {
         $state[$key] = date('c');
         $log[] = "Alert sent: $message";
     } else {
-        $log[] = "FAILED to send alert (check notify_email / telegram settings): $message";
+        $log[] = "FAILED to send alert (check notify_email setting): $message";
     }
 }
 
