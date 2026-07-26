@@ -28,6 +28,11 @@ final class Webhook implements Handler
 {
     public function handle(): void
     {
+        if (Router::isDiagnostic()) {
+            $this->reportDiagnostics();
+            return;
+        }
+
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
             $this->verifySubscription();
             return;
@@ -43,6 +48,95 @@ final class Webhook implements Handler
         foreach ($this->inboundMessages($payload) as $message) {
             $this->respondTo($message);
         }
+    }
+
+    /**
+     * Report what the server actually received, instead of processing it.
+     *
+     * Reaching this at all already proves a great deal: the request got past
+     * the web server, mod_rewrite resolved the route, and PHP ran. What it adds
+     * is the part Meta will never tell you - whether the query parameters
+     * survived the trip, and whether the two tokens genuinely match.
+     *
+     * Secrets are compared by hash prefix; none of them are printed.
+     */
+    private function reportDiagnostics(): void
+    {
+        $fingerprint = static fn(string $v): array => $v === ''
+            ? ['configured' => false]
+            : ['configured' => true, 'length' => strlen($v), 'fingerprint' => substr(hash('sha256', $v), 0, 8)];
+
+        $method    = (string)($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        $mode      = (string)($_GET['hub_mode']         ?? $_GET['hub.mode']         ?? '');
+        $sent      = (string)($_GET['hub_verify_token'] ?? $_GET['hub.verify_token'] ?? '');
+        $challenge = (string)($_GET['hub_challenge']    ?? $_GET['hub.challenge']    ?? '');
+        $expected  = (string)Env::get('META_VERIFY_TOKEN', '');
+        $secret    = (string)Env::get('META_APP_SECRET', '');
+
+        $report = [
+            'reached'  => 'System.php -> Router -> Webhook controller',
+            'request'  => [
+                'method'       => $method,
+                'uri'          => (string)($_SERVER['REQUEST_URI'] ?? ''),
+                'https'        => Auth::isHttps(),
+                'base_path'    => Router::basePath(),
+                'route'        => Router::currentPath(),
+                'query_keys'   => array_values(array_diff(array_keys($_GET), ['diag'])),
+            ],
+            'handshake' => [
+                'hub_mode'           => $mode === '' ? null : $mode,
+                'hub_challenge'      => $challenge === '' ? null : 'present',
+                'token_from_request' => $fingerprint($sent),
+                'token_on_server'    => $fingerprint($expected),
+                'tokens_match'       => $sent !== '' && $expected !== '' && hash_equals($expected, $sent),
+            ],
+            'signature' => [
+                'app_secret'     => $fingerprint($secret),
+                'header_present' => isset($_SERVER['HTTP_X_HUB_SIGNATURE_256']),
+                'body_bytes'     => strlen(Router::rawBody()),
+            ],
+        ];
+
+        if ($method === 'POST' && $secret !== '') {
+            $expectedSig = 'sha256=' . hash_hmac('sha256', Router::rawBody(), $secret);
+            $report['signature']['matches'] =
+                hash_equals($expectedSig, (string)($_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? ''));
+        }
+
+        $report['verdict'] = $this->verdict($method, $mode, $challenge, $sent, $expected);
+
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), "\n";
+    }
+
+    /** Plain-language conclusion, so the report answers rather than describes. */
+    private function verdict(string $method, string $mode, string $challenge, string $sent, string $expected): string
+    {
+        if ($method !== 'GET') {
+            return $expected === ''
+                ? 'META_APP_SECRET / META_VERIFY_TOKEN not fully configured - see the fields above.'
+                : 'POST probe: check signature.matches above. Meta signs every real event.';
+        }
+        if ($expected === '') {
+            return 'META_VERIFY_TOKEN is not set on the server, so every handshake is rejected. Set it in .env.';
+        }
+        if ($sent === '') {
+            return 'No hub.verify_token arrived. Meta always sends one - if you are testing by hand, '
+                 . 'quote the URL: an unquoted & ends the command at the first parameter.';
+        }
+        if ($mode !== 'subscribe') {
+            return "hub.mode was '" . ($mode === '' ? '(absent)' : $mode) . "', expected 'subscribe'.";
+        }
+        if (!hash_equals($expected, $sent)) {
+            return 'The token arrived intact but differs from META_VERIFY_TOKEN. Compare the two '
+                 . 'fingerprints above; note that a ; in an unquoted .env value truncates it.';
+        }
+        if ($challenge === '') {
+            return 'Token matches, but no hub.challenge arrived - Meta always sends one.';
+        }
+
+        return 'Handshake would succeed. If Meta still refuses, it is not reaching this endpoint '
+             . '(certificate, firewall, or a redirect - Meta does not follow redirects).';
     }
 
     /** PHP rewrites dots in query keys to underscores; accept either spelling. */

@@ -340,6 +340,23 @@ controller as the router, so the same URLs work without Apache.
 - **Solution**: Confirm the number is registered (`php setup.php list`) and
   that `META_APP_SECRET` matches the app - a signature mismatch returns 403.
 
+**Issue**: Meta rejects the webhook, or you want to see what the server
+receives
+- **Solution**: Set `WEBHOOK_DIAG_KEY` in `.env` and probe the endpoint from
+  anywhere:
+
+  ```bash
+  curl "https://example.com/pv/webhook?diag=THE_KEY&hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=123"
+  ```
+
+  The JSON reply shows the method, the resolved route, which query parameters
+  survived, whether the two verify tokens match (by hash prefix - neither is
+  printed), whether a signature header arrived, and a plain-language verdict
+  naming the cause. Getting any reply at all already proves the request reached
+  PHP through mod_rewrite. Add `-X POST -H "X-Hub-Signature-256: ..."` to check
+  signing instead. Clear the key when you are done: while it is empty the probe
+  does not exist.
+
 **Issue**: Meta rejects the webhook with "The callback URL or verify token
 could not be validated"
 - **Solution**: That message is the same for every cause, so find out whether

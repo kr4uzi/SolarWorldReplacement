@@ -74,6 +74,22 @@ final class Router
         return self::$rawBody ??= (string)file_get_contents('php://input');
     }
 
+    /**
+     * Is this a diagnostic probe of the webhook?
+     *
+     * Meta reports every verification failure with one opaque message, which
+     * leaves nothing to debug against. When WEBHOOK_DIAG_KEY is set, a request
+     * carrying it reports what the server actually received instead of being
+     * processed. It is off unless that key is configured, and the report never
+     * contains a secret - only lengths and hash prefixes.
+     */
+    public static function isDiagnostic(): bool
+    {
+        $key = (string)Env::get('WEBHOOK_DIAG_KEY', '');
+
+        return $key !== '' && hash_equals($key, (string)($_GET['diag'] ?? ''));
+    }
+
     public static function dispatch(): void
     {
         $path  = self::currentPath();
@@ -105,6 +121,13 @@ final class Router
             }
             self::denyUnauthenticated($path);
             return false;
+        }
+
+        // A diagnostic probe reports on the signature rather than being blocked
+        // by it - otherwise the check you most need to debug is the one that
+        // refuses to tell you anything.
+        if (self::isDiagnostic()) {
+            return true;
         }
 
         // AUTH_SIGNATURE. Meta's one-time verification handshake arrives as a
