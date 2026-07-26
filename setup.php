@@ -208,6 +208,13 @@ function runCheck(): int
         $transport = null;
     }
 
+    if ($transport !== null && $transport->name() === 'http') {
+        $url = (string)PV\Env::get('HTTP_TRANSPORT_URL', '');
+        $url === ''
+            ? $bad('HTTP_TRANSPORT_URL', 'not set - the transport has nowhere to post')
+            : $ok('endpoint', $url);
+    }
+
     if ($transport === null || $transport->name() !== 'whatsapp') {
         $rate = (float)PV\Env::get('PV_EUR_PER_KWH', 0);
         $rate > 0

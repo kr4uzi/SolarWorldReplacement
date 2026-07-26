@@ -119,6 +119,7 @@ through `Messenger`, which resolves the transport named in
 | Transport | Purpose |
 |---|---|
 | `whatsapp` | Meta Cloud API - needs the `META_*` settings and an approved template |
+| `http` | Posts to any HTTP endpoint you describe in `.env` |
 | `log` | Writes messages to a file instead of sending them |
 
 The `log` transport exists so the whole system can be exercised **without any
@@ -134,6 +135,25 @@ alert and the welcome message all run, and you read what would have been sent:
 
 That makes it useful while a provider is undecided or its onboarding is stuck,
 and afterwards for reproducing a problem without messaging real people.
+
+### The `http` transport
+
+Rather than waiting for a bespoke class, point `http` at any service that
+accepts a plain HTTP request - fill in four values from its API documentation:
+
+```ini
+MESSAGING_TRANSPORT    = "http"
+HTTP_TRANSPORT_URL     = "https://api.example.com/v1/messages"
+HTTP_TRANSPORT_HEADERS = "Authorization: Bearer YOUR_KEY|Content-Type: application/json"
+HTTP_TRANSPORT_BODY    = "{\"to\":\"{address}\",\"text\":\"{text}\"}"
+```
+
+`{address}` is the user's phone or address and `{text}` the message. Both are
+escaped for the body's content type - JSON when the `Content-Type` says so,
+otherwise URL encoding - so quotes, newlines and emoji in a report cannot break
+the payload or inject structure into it. Form-encoded endpoints work by setting
+`Content-Type: application/x-www-form-urlencoded` and a body like
+`to={address}&message={text}`.
 
 Adding a provider means writing one class implementing `PV\Transport\Transport`
 and listing it in `Messenger::available()`. No caller changes. The interface
