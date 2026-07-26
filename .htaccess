@@ -7,12 +7,20 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^ System.php [QSA,L]
 
-# Config, CLI tools and logger data are never served, even if a rewrite is
-# bypassed or mod_rewrite is unavailable.
-<FilesMatch "^\.env">
+# The rewrite above deliberately skips files that exist, so any PHP file left
+# in the web root is still executed directly. That matters when upgrading over
+# an older deployment: git does not remove files it never tracked, so the
+# previous entry points survive the pull and would serve the dashboard and the
+# API with no session check at all.
+#
+# Deny every entry point this project has ever shipped. Deleting the stale
+# files is still the right fix - this only makes forgetting harmless.
+<FilesMatch "^(index|api|webhook|setup|job|zero_day_check|pv_daily|pv_data|pv_messages|pv_whatsapp)\.php$">
     Require all denied
 </FilesMatch>
 
-<FilesMatch "^(setup|job)\.php$">
+# Configuration is never served, even if the rewrite is bypassed or
+# mod_rewrite is unavailable.
+<FilesMatch "^\.env">
     Require all denied
 </FilesMatch>

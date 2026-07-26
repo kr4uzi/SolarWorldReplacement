@@ -241,6 +241,45 @@ unchanged from the previous standalone `api.php`:
 
 Values are returned per inverter as `wr0`, `wr1`, ... plus a `total`.
 
+## Upgrading over an existing deployment
+
+`git clone <url> .` into a directory that already has files **fails** with
+`destination path '.' already exists and is not an empty directory`. It changes
+nothing, so it is safe - but it is not the way in.
+
+`data/`, `backup/` and `.env` are all gitignored, so git will neither track nor
+delete them. The real hazard is the opposite one: **git does not remove files it
+never tracked**, so an older `index.php` and `api.php` survive the upgrade and
+keep being served - bypassing the login entirely, since the rewrite skips files
+that exist. The bundled `.htaccess` now denies those names, but deleting them
+is the actual fix.
+
+The cleanest route is to build the new tree beside the old one and swap, which
+also leaves a rollback:
+
+```bash
+cd /var/www
+git clone -b <branch> https://github.com/kr4uzi/SolarWorldReplacement.git pv-new
+cp -a pv/data pv/backup pv/.env pv-new/
+mv pv pv-old && mv pv-new pv
+php pv/setup.php check          # confirm before deleting anything
+# once satisfied: rm -rf pv-old
+```
+
+To upgrade in place instead, attach the existing directory to the repository
+and remove the stale entry points by hand:
+
+```bash
+cd /var/www/pv
+git init && git remote add origin https://github.com/kr4uzi/SolarWorldReplacement.git
+git fetch origin <branch>
+git checkout -b <branch> origin/<branch>
+rm -f index.php api.php webhook.php pv_*.php zero_day_check.php
+php setup.php check
+```
+
+Later updates are then just `git pull`.
+
 ## Installation
 
 1. PHP 8.0+ with `pdo_mysql`, and Apache with `mod_rewrite` (the `.htaccess`
