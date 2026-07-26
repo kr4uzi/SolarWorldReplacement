@@ -108,6 +108,57 @@ final class Auth
         return $statement->fetch() ?: null;
     }
 
+    /**
+     * Create an account whose address is not known yet.
+     *
+     * Telegram identifies people by numeric chat id, which nobody can type
+     * from memory. So the account is created empty with a single-use invite
+     * code; the user taps a link carrying it, and their chat id is captured
+     * from the message that arrives.
+     *
+     * @return array{0:array,1:string} the user and the invite code
+     */
+    public static function createInvite(string $name): array
+    {
+        $code = bin2hex(random_bytes(12));
+
+        $statement = Db::conn()->prepare(
+            'INSERT INTO users (name, phone, address, invite_code, is_active, created_at)
+             VALUES (?, NULL, NULL, ?, 1, NOW())'
+        );
+        $statement->execute([$name, $code]);
+
+        return [self::userById((int)Db::conn()->lastInsertId()), $code];
+    }
+
+    /**
+     * Redeem an invite code by binding the address that presented it.
+     * The code is cleared, so a forwarded link cannot claim the account twice.
+     */
+    public static function bindInvite(string $code, string $address): ?array
+    {
+        $code    = trim($code);
+        $address = trim($address);
+        if ($code === '' || $address === '') {
+            return null;
+        }
+
+        $statement = Db::conn()->prepare(
+            'SELECT * FROM users WHERE invite_code = ? AND is_active = 1 LIMIT 1'
+        );
+        $statement->execute([$code]);
+        $user = $statement->fetch();
+
+        if ($user === false) {
+            return null;
+        }
+
+        $update = Db::conn()->prepare('UPDATE users SET address = ?, invite_code = NULL WHERE id = ?');
+        $update->execute([$address, $user['id']]);
+
+        return self::userById((int)$user['id']);
+    }
+
     /** Accepts either a phone number or an address. */
     public static function removeUser(string $contact): bool
     {

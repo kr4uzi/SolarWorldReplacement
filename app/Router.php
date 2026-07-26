@@ -22,6 +22,7 @@ final class Router
     public const AUTH_SESSION   = 'session';    // signed-in portal user
     public const AUTH_SIGNATURE = 'signature';  // signed by Meta
     public const AUTH_BIRDY     = 'birdy';      // shared secret or HMAC from BirdyChat
+    public const AUTH_TELEGRAM  = 'telegram';   // Telegram's secret-token header
 
     private static ?string $rawBody = null;
 
@@ -35,6 +36,7 @@ final class Router
             'logout'  => [Controller\Logout::class,    self::AUTH_PUBLIC],
             'webhook'       => [Controller\Webhook::class,      self::AUTH_SIGNATURE],
             'birdy-webhook' => [Controller\BirdyWebhook::class, self::AUTH_BIRDY],
+            'telegram-webhook' => [Controller\TelegramWebhook::class, self::AUTH_TELEGRAM],
         ];
     }
 
@@ -136,6 +138,10 @@ final class Router
             return self::authorizeBirdy();
         }
 
+        if ($policy === self::AUTH_TELEGRAM) {
+            return self::authorizeTelegram();
+        }
+
         // AUTH_SIGNATURE. Meta's one-time verification handshake arrives as a
         // GET with no body to sign, so the controller validates that itself
         // against the verify token; only real events are signed.
@@ -198,6 +204,35 @@ final class Router
 
         if (!hash_equals($expected, $provided)) {
             self::fail(403, 'Forbidden', 'webhook secret mismatch');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Telegram's endpoint.
+     *
+     * setWebhook takes a secret_token, which Telegram then repeats in the
+     * X-Telegram-Bot-Api-Secret-Token header on every delivery. That is the
+     * whole mechanism - there is no signature - so the endpoint refuses to run
+     * until one is configured, since otherwise anyone could post updates to it.
+     */
+    private static function authorizeTelegram(): bool
+    {
+        if (self::isDiagnostic()) {
+            return true;
+        }
+
+        $secret = (string)Env::get('TELEGRAM_WEBHOOK_SECRET', '');
+        if ($secret === '') {
+            self::fail(500, 'Webhook rejected', 'TELEGRAM_WEBHOOK_SECRET is not configured');
+            return false;
+        }
+
+        $provided = (string)($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '');
+        if (!hash_equals($secret, $provided)) {
+            self::fail(403, 'Forbidden', 'secret token mismatch');
             return false;
         }
 

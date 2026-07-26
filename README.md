@@ -119,6 +119,7 @@ through `Messenger`, which resolves the transport named in
 | Transport | Purpose |
 |---|---|
 | `whatsapp` | Meta Cloud API - needs the `META_*` settings and an approved template |
+| `telegram` | Telegram Bot API - `TELEGRAM_*` settings, webhook at `/telegram-webhook` |
 | `birdy` | BirdyChat - `BIRDY_*` settings, with its own webhook at `/birdy-webhook` |
 | `http` | Posts to any HTTP endpoint you describe in `.env` |
 | `log` | Writes messages to a file instead of sending them |
@@ -136,6 +137,34 @@ alert and the welcome message all run, and you read what would have been sent:
 
 That makes it useful while a provider is undecided or its onboarding is stuck,
 and afterwards for reproducing a problem without messaging real people.
+
+### Telegram
+
+The quickest provider to stand up: no business verification, no message
+templates, no conversation-window rules, and the menu is native tappable
+buttons rather than keywords to remember.
+
+1. Message [@BotFather](https://t.me/BotFather), send `/newbot`, and put the
+   token in `TELEGRAM_BOT_TOKEN` and the bot's name in `TELEGRAM_BOT_USERNAME`.
+2. Choose any `TELEGRAM_WEBHOOK_SECRET`, then register the endpoint:
+   ```bash
+   php setup.php telegram-webhook
+   ```
+3. Invite each user:
+   ```bash
+   php setup.php invite "Markus"
+   #  https://t.me/PvAnlageBot?start=c0c0487434874f1c1e19af2e
+   ```
+
+Telegram identifies people by numeric chat id, which nobody can look up or
+type, so accounts are created empty and activated by the invite link. Opening
+it starts a chat, binds that account, and the code stops working - a forwarded
+link cannot claim it twice. Until then `check` lists the account as awaiting
+activation.
+
+Authentication is the secret token Telegram echoes back on every delivery.
+The webhook refuses to run until one is set, so the endpoint cannot be left
+open by accident.
 
 ### BirdyChat
 

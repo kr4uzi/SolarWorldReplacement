@@ -112,6 +112,16 @@ final class Db
             $created[] = 'users.address';
         }
 
+        // Telegram accounts are created before their chat id is known: the
+        // invite code is what the user's first message carries back.
+        if (!self::hasColumn('users', 'invite_code')) {
+            self::conn()->exec(
+                'ALTER TABLE users ADD COLUMN invite_code VARCHAR(64) NULL AFTER address,
+                 ADD UNIQUE KEY uniq_users_invite (invite_code)'
+            );
+            $created[] = 'users.invite_code';
+        }
+
         // Users reached by address have no phone number. It has to be NULL
         // rather than '': the unique index treats every empty string as the
         // same value, so a second address-only user could not be stored, and

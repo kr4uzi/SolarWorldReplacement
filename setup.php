@@ -65,6 +65,11 @@ function usage(): void
       php setup.php list                       list users
       php setup.php remove <contact>           delete a user
       php setup.php check                      verify the whole deployment
+      php setup.php test <contact> [text]      send one message and show the result
+
+    Telegram:
+      php setup.php invite <name>              create a user and print their invite link
+      php setup.php telegram-webhook           register this site's webhook with Telegram
 
     TXT;
 }
@@ -106,6 +111,115 @@ function sendWelcome(array $user, bool $skip): void
         echo "Check that the template '{$template}' is approved and that META_TOKEN "
            . "is a non-expiring System User token.\n";
     }
+}
+
+/**
+ * Create a Telegram account and print the link that activates it.
+ *
+ * Telegram identifies people by numeric chat id, which nobody can look up or
+ * type. So the account is created empty and the user's first message - sent by
+ * tapping this link - is what supplies it.
+ */
+function runInvite(string $name): int
+{
+    if ($name === '') {
+        fail('Usage: php setup.php invite <name>');
+    }
+
+    if (!Db::isInstalled()) {
+        Db::migrate();
+        echo "Schema created.\n";
+    }
+
+    [$user, $code] = Auth::createInvite($name);
+
+    echo "Created {$user['name']} (id {$user['id']}), awaiting activation.\n\n";
+    echo "  " . PV\Transport\Telegram::inviteLink($code) . "\n\n";
+    echo "Send them that link. Opening it starts a chat with the bot and binds\n";
+    echo "their account; the code stops working once used.\n";
+
+    return 0;
+}
+
+/**
+ * Point Telegram at this installation's webhook.
+ *
+ * Saves hand-rolling the setWebhook call, and passes the secret token that the
+ * endpoint checks on every delivery.
+ */
+function runTelegramWebhook(): int
+{
+    $secret = (string)PV\Env::get('TELEGRAM_WEBHOOK_SECRET', '');
+    if ($secret === '') {
+        fail('Set TELEGRAM_WEBHOOK_SECRET in .env first - the endpoint refuses deliveries without it.');
+    }
+
+    $url = PV\Router::url('telegram-webhook');
+    if (!str_starts_with($url, 'https://')) {
+        fail("Telegram only accepts an https webhook. PORTAL_URL currently gives: {$url}");
+    }
+
+    echo "Registering {$url}\n\n";
+
+    $result = PV\Transport\Telegram::call('setWebhook', [
+        'url'             => $url,
+        'secret_token'    => $secret,
+        'allowed_updates' => ['message', 'callback_query'],
+    ]);
+
+    printf("HTTP %d\n%s\n\n", $result['status'], $result['body']);
+
+    if (!$result['ok']) {
+        echo "Not registered - the response above is Telegram's own error.\n";
+        return 1;
+    }
+
+    echo "Registered. Users can now message the bot.\n";
+
+    return 0;
+}
+
+/**
+ * Send a single message and report exactly what came back.
+ *
+ * Exists so a provider's request shape can be settled by trial against the
+ * real API: edit the transport settings in .env, run this, read the response,
+ * adjust. No user record and no scheduled run required.
+ */
+function runTest(string $contact, ?string $text): int
+{
+    if ($contact === '') {
+        fail("Usage: php setup.php test <contact> [text]");
+    }
+
+    try {
+        $transport = Messenger::transport();
+    } catch (Throwable $e) {
+        fail($e->getMessage());
+    }
+
+    if (!$transport->isConfigured()) {
+        fail("The '{$transport->name()}' transport is not configured - see php setup.php check");
+    }
+
+    $text ??= 'PV Anlage: Testnachricht. Wenn du das liest, funktioniert der Versand.';
+
+    echo "transport: {$transport->name()}\n";
+    echo "to:        {$contact}\n\n";
+
+    $result = Messenger::notify($contact, $text);
+
+    printf("HTTP %d\n%s\n\n", $result['status'], $result['body'] === '' ? '(empty response)' : $result['body']);
+
+    if ($result['ok']) {
+        echo "Sent. Check the recipient's app.\n";
+        return 0;
+    }
+
+    echo "Not sent. The response above is the provider's own error - adjust the\n";
+    echo "transport settings in .env to match its documentation and run this again.\n";
+
+    return 1;
 }
 
 /**
@@ -208,6 +322,22 @@ function runCheck(): int
         $transport = null;
     }
 
+    if ($transport !== null && $transport->name() === 'telegram') {
+        $username = ltrim(trim((string)PV\Env::get('TELEGRAM_BOT_USERNAME', '')), '@');
+        $username === ''
+            ? $warn('TELEGRAM_BOT_USERNAME', 'not set - invite links cannot be built')
+            : $ok('bot', '@' . $username);
+
+        (string)PV\Env::get('TELEGRAM_WEBHOOK_SECRET', '') === ''
+            ? $bad('TELEGRAM_WEBHOOK_SECRET', 'not set - the webhook refuses every delivery')
+            : $ok('webhook URL', PV\Router::url('telegram-webhook'));
+
+        $pending = Db::conn()->query('SELECT COUNT(*) FROM users WHERE invite_code IS NOT NULL')->fetchColumn();
+        if ((int)$pending > 0) {
+            $warn('invites', $pending . ' user(s) have not opened their invite link yet');
+        }
+    }
+
     if ($transport !== null && $transport->name() === 'http') {
         $url = (string)PV\Env::get('HTTP_TRANSPORT_URL', '');
         $url === ''
@@ -268,6 +398,18 @@ $command = $argv[1] ?? '';
 // broken configuration is precisely its job.
 if ($command === 'check') {
     exit(runCheck());
+}
+
+if ($command === 'test') {
+    exit(runTest($argv[2] ?? '', $argv[3] ?? null));
+}
+
+if ($command === 'invite') {
+    exit(runInvite($argv[2] ?? ''));
+}
+
+if ($command === 'telegram-webhook') {
+    exit(runTelegramWebhook());
 }
 
 if (in_array($command, ['', '-h', '--help', 'help'], true)) {
