@@ -1,11 +1,18 @@
-# Keep secrets and state out of the web.
-# Apache only - on nginx add an equivalent "location ~ /\.env { deny all; }".
+# Everything goes through the front controller, which is where authentication
+# is decided. Nothing else at the web root should be reachable directly.
 
+RewriteEngine On
+
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ System.php [QSA,L]
+
+# Config, CLI tools and logger data are never served, even if a rewrite is
+# bypassed or mod_rewrite is unavailable.
 <FilesMatch "^\.env">
     Require all denied
 </FilesMatch>
 
-# The logger's upload directory also holds pv_state.json.
-<FilesMatch "^pv_state\.json$">
+<FilesMatch "^(setup|job)\.php$">
     Require all denied
 </FilesMatch>

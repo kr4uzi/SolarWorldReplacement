@@ -31,6 +31,16 @@
             font-size: 2em;
         }
 
+        .session-bar {
+            margin-top: 8px;
+            font-size: 0.85em;
+            opacity: 0.75;
+        }
+
+        .session-bar a {
+            color: inherit;
+        }
+
         .subtitle {
             text-align: center;
             color: #7f8c8d;
@@ -208,6 +218,10 @@
     <div class="container">
         <h1>Photovoltaic Monitoring Dashboard</h1>
         <p class="subtitle" id="subtitle">Energy Production Overview</p>
+        <p class="session-bar">
+            Angemeldet als <strong><?= htmlspecialchars((string)$user['name'], ENT_QUOTES, 'UTF-8') ?></strong>
+            &middot; <a href="<?= htmlspecialchars($logoutUrl, ENT_QUOTES, 'UTF-8') ?>">Abmelden</a>
+        </p>
 
         <!-- Stats Dashboard -->
         <div class="stats-dashboard">
@@ -300,6 +314,7 @@
     </div>
 
     <script>
+        const API_URL = <?= json_encode($apiUrl, JSON_UNESCAPED_SLASHES) ?>;
         // Global configuration
         let pvConfig = null;
         let charts = {};
@@ -359,7 +374,7 @@
          */
         async function fetchData(view, params = {}) {
             const queryString = new URLSearchParams({view, ...params}).toString();
-            const response = await fetch(`api.php?${queryString}`);
+            const response = await fetch(`${API_URL}?${queryString}`);
             const result = await response.json();
 
             if (!result.success) {
