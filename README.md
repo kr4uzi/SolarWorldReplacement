@@ -178,10 +178,35 @@ All settings live in `.env` (see `.env.example`), read with PHP's built-in
 `parse_ini_file()` - no library required. Real environment variables override
 the file.
 
+### Where .env goes
+
+Next to `System.php`, in the project root - the same directory as `setup.php`
+and `job.php`:
+
+```
+pv/
+├── System.php
+├── .env          <-- here
+├── app/
+└── views/
+```
+
+It must be readable by **both** the web server user and whoever runs cron,
+which are often different accounts. `chmod 640` with the file group-owned by
+the web server user is usually right; `600` as root will work on the CLI and
+silently break the site. A file that exists but cannot be read now fails
+loudly, naming the path and the user, rather than falling back to defaults.
+
+To keep it outside the document root instead, put it anywhere readable and set
+`PV_ENV_PATH` as a real environment variable - it is read before the file, so
+it cannot live inside `.env` itself. With mod_php, `SetEnv PV_ENV_PATH
+/etc/pv.env` in the vhost works; with php-fpm use `env[PV_ENV_PATH] = /etc/pv.env`
+in the pool config, and remember cron needs it too.
+
 `.env` holds the database password, the Meta token and the app secret. The
 bundled `.htaccess` denies it on Apache; on nginx add
-`location ~ /\.env { deny all; }`, or keep it above the document root and point
-`PV_ENV_PATH` at it. The `data/` directory should not be browsable either.
+`location ~ /\.env { deny all; }`. The `data/` directory should not be
+browsable either.
 
 ### Money figures
 
