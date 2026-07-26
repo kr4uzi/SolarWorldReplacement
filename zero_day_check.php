@@ -4,9 +4,10 @@
  *
  * Detects "zero days" - days where the whole plant or a single inverter
  * reported (almost) no energy production, or where the data logger stopped
- * uploading data - and sends a warning via email.
+ * uploading data - and sends a warning via email and/or WhatsApp.
  *
- * No external libraries required: email uses PHP's built-in mail().
+ * No external libraries required: email uses PHP's built-in mail(),
+ * WhatsApp uses a single HTTPS request to CallMeBot.
  *
  * Run once per day (after the day is complete), either via cron:
  *     15 6 * * * php /path/to/pv/zero_day_check.php
@@ -30,9 +31,20 @@ $config = [
     // the logger has probably stopped uploading -> alert.
     'max_data_age_days' => 2,
 
-    // --- Notification: email ---
+    // --- Notification: email (leave empty to disable) ---
     'notify_email' => '',           // e.g. 'me@example.com'
     'from_email'   => '',           // optional From: header, e.g. 'pv@example.com'
+
+    // --- Notification: WhatsApp via CallMeBot (leave empty to disable) ---
+    // Free for personal notifications to your own number. One-time setup:
+    // 1. Save +34 644 20 47 56 in your phone's contacts (e.g. as "CallMeBot").
+    // 2. Send that contact this exact WhatsApp message:
+    //        I allow callmebot to send me messages
+    // 3. The bot replies with your personal API key - paste it below.
+    // Note: CallMeBot is a free third-party relay, so alert text passes through
+    // their server. For an official (paid, business-verified) route see README.
+    'whatsapp_phone'  => '',        // your number incl. country code, e.g. '+41791234567'
+    'whatsapp_apikey' => '',        // the key CallMeBot replied with
 
     // Secret key required when the script is called via HTTP (web-cron).
     // Leave empty to allow CLI execution only.
@@ -96,13 +108,50 @@ function inverterName(string $dataDir, int $index): string
     return 'WR ' . ($index + 1);
 }
 
-function sendAlert(array $config, string $subject, string $message): bool
+/** Send a WhatsApp message via CallMeBot. Uses cURL, falls back to streams. */
+function sendWhatsApp(array $config, string $text): bool
 {
-    if ($config['notify_email'] === '') {
+    $url = 'https://api.callmebot.com/whatsapp.php?' . http_build_query([
+        'phone'  => $config['whatsapp_phone'],
+        'text'   => $text,
+        'apikey' => $config['whatsapp_apikey'],
+    ]);
+
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+        $body   = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        return $body !== false && $status >= 200 && $status < 300;
+    }
+
+    // allow_url_fopen fallback for hosts without the cURL extension
+    $context = stream_context_create(['http' => ['timeout' => 15, 'ignore_errors' => true]]);
+    if (@file_get_contents($url, false, $context) === false) {
         return false;
     }
-    $headers = $config['from_email'] !== '' ? 'From: ' . $config['from_email'] : '';
-    return mail($config['notify_email'], $subject, $message, $headers);
+    return (bool)preg_match('#^HTTP/\S+\s+2\d\d#', $http_response_header[0] ?? '');
+}
+
+/**
+ * Send the alert through every configured channel.
+ * Returns [channel => delivered?] so the caller can report partial failures.
+ */
+function sendAlert(array $config, string $subject, string $message): array
+{
+    $results = [];
+
+    if ($config['notify_email'] !== '') {
+        $headers = $config['from_email'] !== '' ? 'From: ' . $config['from_email'] : '';
+        $results['email'] = mail($config['notify_email'], $subject, $message, $headers);
+    }
+
+    if ($config['whatsapp_phone'] !== '' && $config['whatsapp_apikey'] !== '') {
+        $results['whatsapp'] = sendWhatsApp($config, $subject . ': ' . $message);
+    }
+
+    return $results;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,11 +212,21 @@ foreach ($alerts as $key => $message) {
         $log[] = "Already alerted, skipping: $message";
         continue;
     }
-    if (sendAlert($config, 'PV Warning', $message)) {
+    $results = sendAlert($config, 'PV Warning', $message);
+    $ok     = array_keys(array_filter($results));
+    $failed = array_keys(array_filter($results, fn($delivered) => !$delivered));
+
+    if (empty($results)) {
+        $log[] = "No notification channel configured (set notify_email and/or "
+               . "whatsapp_phone + whatsapp_apikey): $message";
+    } elseif (!empty($ok)) {
+        // Delivered on at least one channel - record it so we do not repeat.
         $state[$key] = date('c');
-        $log[] = "Alert sent: $message";
+        $log[] = 'Alert sent via ' . implode(', ', $ok)
+               . (empty($failed) ? '' : ' (FAILED: ' . implode(', ', $failed) . ')')
+               . ": $message";
     } else {
-        $log[] = "FAILED to send alert (check notify_email setting): $message";
+        $log[] = 'FAILED to send alert via ' . implode(', ', $failed) . ": $message";
     }
 }
 
