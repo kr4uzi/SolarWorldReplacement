@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * Account management. CLI only.
  *
- *   php setup.php init                      create the database schema
+ *   php setup.php init                      create or update the database schema
  *   php setup.php "Markus" +4915112345678   add a user (schema is created if needed)
  *   php setup.php add "Markus" +49151...    same thing, explicit
  *   php setup.php list                      show all accounts
@@ -38,6 +38,21 @@ use PV\Data;
 use PV\Db;
 use PV\Messages;
 use PV\Messenger;
+
+/**
+ * Bring the schema up to date before anything writes to it.
+ *
+ * Upgrading by pulling code leaves the old tables in place, so a version that
+ * added a column would otherwise fail on the first insert with a bare SQL
+ * error. Applying what is missing is idempotent and cheap.
+ */
+function ensureSchema(): void
+{
+    $applied = Db::migrate();
+    foreach ($applied as $change) {
+        echo "Schema: {$change}\n";
+    }
+}
 
 /** How a user is displayed: their address, or their phone number. */
 function contactOf(array $user): string
@@ -126,10 +141,7 @@ function runInvite(string $name): int
         fail('Usage: php setup.php invite <name>');
     }
 
-    if (!Db::isInstalled()) {
-        Db::migrate();
-        echo "Schema created.\n";
-    }
+    ensureSchema();
 
     [$user, $code] = Auth::createInvite($name);
 
@@ -260,8 +272,13 @@ function runCheck(): int
         $ok('connection', (string)PV\Env::get('DB_NAME', '(via DB_DSN)'));
 
         if (Db::isInstalled()) {
+            $pending = Db::pending();
+            $pending === []
+                ? $ok('schema', 'up to date')
+                : $bad('schema', 'out of date (' . implode(', ', array_keys($pending))
+                     . ') - run: php setup.php init');
+
             $users = Auth::activeUsers();
-            $ok('schema', 'installed');
             $users === []
                 ? $warn('users', 'none yet - add one: php setup.php "Name" +49...')
                 : $ok('users', count($users) . ' registered');
@@ -432,8 +449,10 @@ switch ($command) {
         break;
 
     case 'init':
-        $tables = Db::migrate();
-        echo "Schema ready: " . implode(', ', $tables) . "\n";
+        $applied = Db::migrate();
+        echo $applied === []
+            ? "Schema already up to date.\n"
+            : "Schema updated:\n  " . implode("\n  ", $applied) . "\n";
         break;
 
     case 'list':
@@ -473,11 +492,9 @@ switch ($command) {
             fail("Both a name and a phone number are required.");
         }
 
-        // Creating the schema on first use means a fresh install is one command.
-        if (!Db::isInstalled()) {
-            Db::migrate();
-            echo "Schema created.\n";
-        }
+        // Creating or updating the schema on first use means a fresh install
+        // is one command, and an upgraded one does not need a separate step.
+        ensureSchema();
 
         try {
             $user = Auth::addUser($name, $phone);

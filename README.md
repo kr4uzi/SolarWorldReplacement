@@ -70,7 +70,7 @@ There are no passwords. A user record is the only thing that grants access, and
 the same row decides both who the bot answers and who can open the portal.
 
 ```bash
-php setup.php init                        # create the schema
+php setup.php init                        # create or update the schema
 php setup.php "Markus" +4915112345678     # add a user
 php setup.php list
 php setup.php remove +4915112345678
@@ -83,6 +83,12 @@ service window and Meta permits nothing else, which also makes an unapproved
 template the likeliest reason for it to fail. The account is created either
 way; a failed greeting is reported, never fatal. Pass `--no-message` to skip
 it, and it is skipped automatically while WhatsApp is still unconfigured.
+
+After pulling a new version, run `php setup.php init` - it applies whatever
+columns that version added and leaves existing rows untouched. `check` reports
+an out-of-date schema, and `job.php` refuses to run against one rather than
+failing mid-send. The commands that create users apply pending changes
+themselves, so a fresh install is still a single command.
 
 `check` is the fastest way to find out what is still missing. It reports on the
 configuration file, the database and schema, the logger's files, the portal URL

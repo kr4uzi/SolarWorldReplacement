@@ -57,6 +57,12 @@ if (!Db::isInstalled()) {
     exit(1);
 }
 
+if (!Db::isCurrent()) {
+    fwrite(STDERR, "Schema is out of date (" . implode(', ', array_keys(Db::pending()))
+        . "). Run: php setup.php init\n");
+    exit(1);
+}
+
 /** Has this exact message already gone to this user? */
 function alreadySent(string $key): bool
 {

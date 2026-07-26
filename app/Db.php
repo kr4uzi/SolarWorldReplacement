@@ -53,26 +53,81 @@ final class Db
     }
 
     /**
-     * Create the schema. Safe to run repeatedly - every statement is
-     * IF NOT EXISTS, so setup.php can be re-run without dropping anything.
+     * Schema changes that have not been applied yet.
+     *
+     * An installation upgraded by pulling new code has the old tables but not
+     * the newer columns, and nothing about the running code makes that visible
+     * until a query fails. Listing the gap lets every entry point either close
+     * it or say plainly what is wrong.
+     *
+     * @return array<string,string> label => the statement that would fix it
+     */
+    public static function pending(): array
+    {
+        $pending = [];
+
+        if (!self::hasTable('users')) {
+            return ['schema' => 'not installed'];
+        }
+
+        if (!self::hasColumn('users', 'address')) {
+            $pending['users.address'] =
+                'ALTER TABLE users ADD COLUMN address VARCHAR(190) NULL AFTER phone';
+        }
+
+        // Telegram accounts are created before their chat id is known: the
+        // invite code is what the user's first message carries back.
+        if (!self::hasColumn('users', 'invite_code')) {
+            $pending['users.invite_code'] =
+                'ALTER TABLE users ADD COLUMN invite_code VARCHAR(64) NULL AFTER address,
+                 ADD UNIQUE KEY uniq_users_invite (invite_code)';
+        }
+
+        // Users reached by address have no phone number. It has to be NULL
+        // rather than '': the unique index treats every empty string as the
+        // same value, so a second address-only user could not be stored, and
+        // an empty lookup would match the first one.
+        if (!self::columnIsNullable('users', 'phone')) {
+            $pending['users.phone nullable'] = 'ALTER TABLE users MODIFY phone VARCHAR(20) NULL';
+        }
+
+        return $pending;
+    }
+
+    public static function isCurrent(): bool
+    {
+        return self::pending() === [];
+    }
+
+    /**
+     * Bring the schema up to date. Safe to run repeatedly, and safe to run on
+     * an installation created by any earlier version - it only applies what is
+     * actually missing.
+     *
+     * @return array<int,string> what was applied; empty when already current
      */
     public static function migrate(): array
     {
-        $statements = [
+        $applied = [];
+
+        foreach ([
             'users' => "
                 CREATE TABLE IF NOT EXISTS users (
                     id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
                     name       VARCHAR(100) NOT NULL,
-                    phone      VARCHAR(20)  NOT NULL,
+                    phone      VARCHAR(20)  NULL,
+                    address    VARCHAR(190) NULL,
+                    invite_code VARCHAR(64) NULL,
                     is_active  TINYINT(1)   NOT NULL DEFAULT 1,
                     created_at DATETIME     NOT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uniq_users_phone (phone)
+                    UNIQUE KEY uniq_users_phone (phone),
+                    UNIQUE KEY uniq_users_invite (invite_code)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
             // Tokens are stored as a SHA-256 hash: a database leak then yields
             // nothing usable, since the plaintext only ever exists in the
-            // WhatsApp message we sent.
+            // message we sent.
             'login_tokens' => "
                 CREATE TABLE IF NOT EXISTS login_tokens (
                     id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -96,40 +151,46 @@ final class Db
                     ran_at  DATETIME    NOT NULL,
                     PRIMARY KEY (job_key)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
-        ];
-
-        $created = [];
-        foreach ($statements as $table => $sql) {
+        ] as $table => $sql) {
+            if (self::hasTable($table)) {
+                continue;
+            }
             self::conn()->exec($sql);
-            $created[] = $table;
+            $applied[] = "created table {$table}";
         }
 
-        // Not every transport addresses people by phone number - some use an
-        // email or an account handle. Added separately so existing
-        // installations pick it up without a manual migration.
-        if (!self::hasColumn('users', 'address')) {
-            self::conn()->exec('ALTER TABLE users ADD COLUMN address VARCHAR(190) NULL AFTER phone');
-            $created[] = 'users.address';
+        // Then whatever a pre-existing installation is missing.
+        foreach (self::pending() as $label => $statement) {
+            self::conn()->exec($statement);
+            $applied[] = "added {$label}";
         }
 
-        // Telegram accounts are created before their chat id is known: the
-        // invite code is what the user's first message carries back.
-        if (!self::hasColumn('users', 'invite_code')) {
-            self::conn()->exec(
-                'ALTER TABLE users ADD COLUMN invite_code VARCHAR(64) NULL AFTER address,
-                 ADD UNIQUE KEY uniq_users_invite (invite_code)'
-            );
-            $created[] = 'users.invite_code';
-        }
-
-        // Users reached by address have no phone number. It has to be NULL
-        // rather than '': the unique index treats every empty string as the
-        // same value, so a second address-only user could not be stored, and
-        // an empty lookup would match the first one.
-        self::conn()->exec('ALTER TABLE users MODIFY phone VARCHAR(20) NULL');
+        // Address-only users must hold NULL, not '', for the unique index.
         self::conn()->exec("UPDATE users SET phone = NULL WHERE phone = ''");
 
-        return $created;
+        return $applied;
+    }
+
+    private static function hasTable(string $table): bool
+    {
+        $statement = self::conn()->prepare(
+            'SELECT 1 FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1'
+        );
+        $statement->execute([$table]);
+
+        return $statement->fetchColumn() !== false;
+    }
+
+    private static function columnIsNullable(string $table, string $column): bool
+    {
+        $statement = self::conn()->prepare(
+            'SELECT is_nullable FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1'
+        );
+        $statement->execute([$table, $column]);
+
+        return strtoupper((string)$statement->fetchColumn()) === 'YES';
     }
 
     /** Portable column check - MySQL has no ADD COLUMN IF NOT EXISTS. */
