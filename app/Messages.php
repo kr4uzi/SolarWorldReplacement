@@ -138,6 +138,23 @@ final class Messages
         return 'Diese Nummer ist nicht freigeschaltet.';
     }
 
+    /**
+     * Sent when an account is created.
+     *
+     * Deliberately short and free of line breaks: a new user has never written
+     * to us, so there is no open service window and this can only go out as a
+     * template - and template parameters are flattened onto a single line.
+     */
+    public static function welcome(string $name): string
+    {
+        return sprintf(
+            'Hallo %s! Du bist jetzt für die PV-Anlage freigeschaltet. '
+            . 'Schreib mir "Menü" für Monats- und Jahresertrag oder den Zugang zum Portal. '
+            . 'Wenn die Anlage nicht produziert, melde ich mich von selbst.',
+            $name
+        );
+    }
+
     // --- Scheduled messages -------------------------------------------------
 
     /**

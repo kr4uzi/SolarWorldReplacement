@@ -77,6 +77,13 @@ php setup.php remove +4915112345678
 php setup.php check                       # verify the whole deployment
 ```
 
+Adding a user sends them a WhatsApp welcome message introducing the menu. It is
+a template message - a new user has never written to us, so there is no open
+service window and Meta permits nothing else, which also makes an unapproved
+template the likeliest reason for it to fail. The account is created either
+way; a failed greeting is reported, never fatal. Pass `--no-message` to skip
+it, and it is skipped automatically while WhatsApp is still unconfigured.
+
 `check` is the fastest way to find out what is still missing. It reports on the
 configuration file, the database and schema, the logger's files, the portal URL
 and every Meta credential, and exits non-zero if anything is broken - so it also

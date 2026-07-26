@@ -11,6 +11,9 @@ declare(strict_types=1);
  *   php setup.php remove +49151...          delete an account and its tokens
  *   php setup.php check                     verify the whole deployment
  *
+ * Adding a user sends them a WhatsApp welcome message. Pass --no-message to
+ * skip it; it is skipped automatically while WhatsApp is unconfigured.
+ *
  * A user record is the only thing that grants access: the same row decides
  * who the bot answers and who can hold a portal session. There is no
  * self-registration and no password anywhere in the system.
@@ -29,6 +32,8 @@ require __DIR__ . '/app/bootstrap.php';
 use PV\Auth;
 use PV\Data;
 use PV\Db;
+use PV\Messages;
+use PV\WhatsApp;
 
 /** @return never */
 function fail(string $message, int $code = 1)
@@ -42,13 +47,51 @@ function usage(): void
     echo <<<TXT
     Usage:
       php setup.php init                       create the database schema
-      php setup.php <name> <phone>             add a user
+      php setup.php <name> <phone>             add a user (sends a welcome message)
       php setup.php add <name> <phone>         add a user
+                    [--no-message]             ... without the welcome message
       php setup.php list                       list users
       php setup.php remove <phone>             delete a user
       php setup.php check                      verify the whole deployment
 
     TXT;
+}
+
+/**
+ * Greet a newly registered user over WhatsApp.
+ *
+ * This has to be a template message: the person has never written to us, so
+ * there is no open 24-hour service window and Meta would refuse free-form
+ * text. It follows that an unapproved template is the likeliest reason for a
+ * failure here.
+ *
+ * A failure is reported but never fatal - the account exists either way, and
+ * the user can simply message the bot to get going.
+ */
+function sendWelcome(array $user, bool $skip): void
+{
+    if ($skip) {
+        echo "Welcome message skipped (--no-message).\n";
+        return;
+    }
+
+    if (!WhatsApp::isConfigured()) {
+        echo "No welcome message sent: WhatsApp is not configured yet "
+           . "(META_TOKEN / META_PHONE_NUMBER_ID).\n";
+        return;
+    }
+
+    $result = WhatsApp::sendTemplate($user['phone'], Messages::welcome($user['name']));
+
+    if ($result['ok']) {
+        echo "Welcome message sent.\n";
+        return;
+    }
+
+    $template = (string)PV\Env::get('META_TEMPLATE_NAME', 'pv_update');
+    echo "Could not send the welcome message (HTTP {$result['status']}): {$result['body']}\n";
+    echo "The account works regardless. Check that the template '{$template}' is approved "
+       . "and that META_TOKEN is a non-expiring System User token.\n";
 }
 
 /**
@@ -254,5 +297,7 @@ switch ($command) {
 
         echo "Added {$user['name']} (+{$user['phone']}).\n";
         echo "They can now message the bot and request a portal link.\n";
+
+        sendWelcome($user, in_array('--no-message', $argv, true));
         break;
 }
