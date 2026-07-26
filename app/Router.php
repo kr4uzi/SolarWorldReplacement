@@ -110,7 +110,11 @@ final class Router
         // AUTH_SIGNATURE. Meta's one-time verification handshake arrives as a
         // GET with no body to sign, so the controller validates that itself
         // against the verify token; only real events are signed.
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
+        //
+        // HEAD is treated the same. Meta never sends one, but uptime probes
+        // and `curl -I` do, and answering those with a signature failure looks
+        // like a broken endpoint when nothing is wrong.
+        if (in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET', 'HEAD'], true)) {
             return true;
         }
 
