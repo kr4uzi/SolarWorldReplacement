@@ -1,7 +1,10 @@
 <?php
 declare(strict_types=1);
 
-namespace PV;
+namespace PV\Transport;
+
+use PV\Env;
+use PV\Messages;
 
 /**
  * The only place that talks to Meta.
@@ -18,13 +21,45 @@ namespace PV;
  * No external libraries: plain HTTPS via cURL, falling back to stream wrappers
  * where the cURL extension is unavailable.
  */
-final class WhatsApp
+final class WhatsApp implements Transport
 {
     public const MENU_PORTAL = 'portal';
     public const MENU_MONTH  = 'month';
     public const MENU_YEAR   = 'year';
 
-    public static function isConfigured(): bool
+    public function name(): string
+    {
+        return 'whatsapp';
+    }
+
+    public function addressKind(): string
+    {
+        return 'phone';
+    }
+
+    public function sendReply(string $address, string $text): array
+    {
+        return self::sendText($address, $text);
+    }
+
+    public function sendNotification(string $address, string $text): array
+    {
+        // Business-initiated, so Meta requires an approved template.
+        return self::sendTemplate($address, $text);
+    }
+
+    public function sendMenu(string $address): array
+    {
+        return self::sendList($address);
+    }
+
+    public function isConfigured(): bool
+    {
+        return self::hasCredentials();
+    }
+
+    /** Static form, so callers can ask before building an instance. */
+    public static function hasCredentials(): bool
     {
         return (string)Env::get('META_TOKEN', '') !== ''
             && (string)Env::get('META_PHONE_NUMBER_ID', '') !== '';
@@ -49,7 +84,7 @@ final class WhatsApp
     /** @return array{ok:bool,status:int,body:string} */
     private static function post(array $payload): array
     {
-        if (!self::isConfigured()) {
+        if (!self::hasCredentials()) {
             return ['ok' => false, 'status' => 0, 'body' => 'WhatsApp is not configured (META_TOKEN / META_PHONE_NUMBER_ID)'];
         }
 
@@ -134,7 +169,7 @@ final class WhatsApp
     }
 
     /** The German menu, as an interactive list. */
-    public static function sendMenu(string $to): array
+    public static function sendList(string $to): array
     {
         return self::post([
             'messaging_product' => 'whatsapp',

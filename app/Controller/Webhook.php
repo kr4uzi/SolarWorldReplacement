@@ -7,7 +7,8 @@ use PV\Auth;
 use PV\Env;
 use PV\Messages;
 use PV\Router;
-use PV\WhatsApp;
+use PV\Messenger;
+use PV\Transport\WhatsApp;
 
 /**
  * Meta's webhook endpoint.
@@ -220,9 +221,9 @@ final class Webhook implements Handler
 
         match ($action) {
             WhatsApp::MENU_PORTAL => $this->sendPortalLink($user),
-            WhatsApp::MENU_MONTH  => WhatsApp::sendText($from, Messages::currentMonth()),
-            WhatsApp::MENU_YEAR   => WhatsApp::sendText($from, Messages::currentYear()),
-            default               => WhatsApp::sendMenu($from),
+            WhatsApp::MENU_MONTH  => Messenger::reply($from, Messages::currentMonth()),
+            WhatsApp::MENU_YEAR   => Messenger::reply($from, Messages::currentYear()),
+            default               => Messenger::menu($from),
         };
     }
 
@@ -257,7 +258,7 @@ final class Webhook implements Handler
         $ttl   = max(1, (int)Env::get('LOGIN_TOKEN_TTL_MINUTES', 15));
         $url   = Router::url('login') . '?t=' . urlencode($token);
 
-        WhatsApp::sendText($user['phone'], Messages::portalLink($url, $ttl));
+        Messenger::reply(Messenger::addressFor($user), Messages::portalLink($url, $ttl));
     }
 
     private function log(string $line): void

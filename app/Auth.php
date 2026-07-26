@@ -48,28 +48,58 @@ final class Auth
         return Db::conn()->query('SELECT * FROM users WHERE is_active = 1 ORDER BY id')->fetchAll();
     }
 
-    public static function addUser(string $name, string $phone): array
+    /**
+     * Register a user.
+     *
+     * $contact is a phone number, or an address for transports that do not use
+     * phone numbers (an email, for instance). Which one it is is decided by
+     * whether it looks like an address rather than by configuration, so a
+     * single account list can serve more than one transport.
+     */
+    public static function addUser(string $name, string $contact): array
     {
-        $digits = self::normalizePhone($phone);
-        if ($digits === '' || strlen($digits) < 8) {
-            throw new \InvalidArgumentException("'{$phone}' is not a usable phone number");
-        }
-        if (self::userByPhone($digits) !== null) {
-            throw new \RuntimeException("A user with phone +{$digits} already exists");
+        $isAddress = str_contains($contact, '@');
+
+        if ($isAddress) {
+            $address = trim($contact);
+            $digits  = '';
+            if (self::userByAddress($address) !== null) {
+                throw new \RuntimeException("A user with address {$address} already exists");
+            }
+        } else {
+            $address = null;
+            $digits  = self::normalizePhone($contact);
+            if ($digits === '' || strlen($digits) < 8) {
+                throw new \InvalidArgumentException("'{$contact}' is not a usable phone number or address");
+            }
+            if (self::userByPhone($digits) !== null) {
+                throw new \RuntimeException("A user with phone +{$digits} already exists");
+            }
         }
 
         $statement = Db::conn()->prepare(
-            'INSERT INTO users (name, phone, is_active, created_at) VALUES (?, ?, 1, NOW())'
+            'INSERT INTO users (name, phone, address, is_active, created_at) VALUES (?, ?, ?, 1, NOW())'
         );
-        $statement->execute([$name, $digits]);
+        $statement->execute([$name, $digits, $address]);
 
         return self::userById((int)Db::conn()->lastInsertId());
     }
 
-    public static function removeUser(string $phone): bool
+    public static function userByAddress(string $address): ?array
     {
-        $statement = Db::conn()->prepare('DELETE FROM users WHERE phone = ?');
-        $statement->execute([self::normalizePhone($phone)]);
+        $statement = Db::conn()->prepare(
+            'SELECT * FROM users WHERE address = ? AND is_active = 1 LIMIT 1'
+        );
+        $statement->execute([trim($address)]);
+
+        return $statement->fetch() ?: null;
+    }
+
+    /** Accepts either a phone number or an address. */
+    public static function removeUser(string $contact): bool
+    {
+        $statement = Db::conn()->prepare('DELETE FROM users WHERE phone = ? OR address = ?');
+        $statement->execute([self::normalizePhone($contact), trim($contact)]);
 
         return $statement->rowCount() > 0;
     }

@@ -103,7 +103,28 @@ final class Db
             self::conn()->exec($sql);
             $created[] = $table;
         }
+
+        // Not every transport addresses people by phone number - some use an
+        // email or an account handle. Added separately so existing
+        // installations pick it up without a manual migration.
+        if (!self::hasColumn('users', 'address')) {
+            self::conn()->exec('ALTER TABLE users ADD COLUMN address VARCHAR(190) NULL AFTER phone');
+            $created[] = 'users.address';
+        }
+
         return $created;
+    }
+
+    /** Portable column check - MySQL has no ADD COLUMN IF NOT EXISTS. */
+    private static function hasColumn(string $table, string $column): bool
+    {
+        $statement = self::conn()->prepare(
+            'SELECT 1 FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1'
+        );
+        $statement->execute([$table, $column]);
+
+        return $statement->fetchColumn() !== false;
     }
 
     /** True when the schema has been created. */

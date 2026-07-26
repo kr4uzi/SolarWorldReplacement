@@ -110,6 +110,47 @@ That is inherent to the design and fine for a household, but it is why the
 tokens are short-lived and single-use - and why the portal should be HTTPS
 only, since the token travels in a URL.
 
+## Messaging transports
+
+The application never names a messaging provider. Everything that sends goes
+through `Messenger`, which resolves the transport named in
+`MESSAGING_TRANSPORT`:
+
+| Transport | Purpose |
+|---|---|
+| `whatsapp` | Meta Cloud API - needs the `META_*` settings and an approved template |
+| `log` | Writes messages to a file instead of sending them |
+
+The `log` transport exists so the whole system can be exercised **without any
+provider account at all**. The scheduled job, the monthly report, the fault
+alert and the welcome message all run, and you read what would have been sent:
+
+```
+2026-07-26T12:15:03+02:00  [notification] to 4915112345678
+    ⚠️ Keine Produktion
+       Bis 12:15 Uhr erst 0,0 kWh (erwartet: über 0,1 kWh).
+       Dach Sued 0 W · Dach West 0 W
+```
+
+That makes it useful while a provider is undecided or its onboarding is stuck,
+and afterwards for reproducing a problem without messaging real people.
+
+Adding a provider means writing one class implementing `PV\Transport\Transport`
+and listing it in `Messenger::available()`. No caller changes. The interface
+distinguishes a *reply* (inside a conversation the user started) from a
+*notification* (started by us), because on WhatsApp that difference decides
+both the cost and whether a pre-approved template is required; transports
+without that distinction treat them alike.
+
+Users are addressed by phone number, or by an address for transports that do
+not use phone numbers - `setup.php` decides which from whether the contact
+contains an `@`:
+
+```bash
+php setup.php "Markus" +4915112345678
+php setup.php "Anna" anna@example.com
+```
+
 ## The Bot
 
 Message the business number and the German menu appears:

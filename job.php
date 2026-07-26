@@ -33,7 +33,7 @@ use PV\Data;
 use PV\Db;
 use PV\Env;
 use PV\Messages;
-use PV\WhatsApp;
+use PV\Messenger;
 
 $verbose = in_array('-v', $_SERVER['argv'], true) || in_array('--verbose', $_SERVER['argv'], true);
 $dryRun  = in_array('--dry-run', $_SERVER['argv'], true);
@@ -96,16 +96,17 @@ function deliver(string $baseKey, string $message): void
         }
 
         if ($dryRun) {
-            say("[dry-run] would send {$baseKey} to +{$user['phone']}");
+            say('[dry-run] would send ' . $baseKey . ' to ' . Messenger::addressFor($user));
             continue;
         }
 
-        $result = WhatsApp::sendTemplate($user['phone'], $message);
+        $address = Messenger::addressFor($user);
+        $result  = Messenger::notify($address, $message);
         if ($result['ok']) {
             markSent($key);
-            say("sent {$baseKey} to +{$user['phone']}");
+            say("sent {$baseKey} to {$address}");
         } else {
-            say("FAILED {$baseKey} to +{$user['phone']} (HTTP {$result['status']}): {$result['body']}");
+            say("FAILED {$baseKey} to {$address} (HTTP {$result['status']}): {$result['body']}");
         }
     }
 }

@@ -11,8 +11,12 @@ declare(strict_types=1);
  *   php setup.php remove +49151...          delete an account and its tokens
  *   php setup.php check                     verify the whole deployment
  *
- * Adding a user sends them a WhatsApp welcome message. Pass --no-message to
- * skip it; it is skipped automatically while WhatsApp is unconfigured.
+ * Adding a user sends them a welcome message over the configured transport.
+ * Pass --no-message to skip it; it is skipped automatically while that
+ * transport is unconfigured.
+ *
+ * A contact is a phone number, or an address (anything containing @) for
+ * transports that do not use phone numbers.
  *
  * A user record is the only thing that grants access: the same row decides
  * who the bot answers and who can hold a portal session. There is no
@@ -33,7 +37,15 @@ use PV\Auth;
 use PV\Data;
 use PV\Db;
 use PV\Messages;
-use PV\WhatsApp;
+use PV\Messenger;
+
+/** How a user is displayed: their address, or their phone number. */
+function contactOf(array $user): string
+{
+    $address = trim((string)($user['address'] ?? ''));
+
+    return $address !== '' ? $address : '+' . $user['phone'];
+}
 
 /** @return never */
 function fail(string $message, int $code = 1)
@@ -47,23 +59,22 @@ function usage(): void
     echo <<<TXT
     Usage:
       php setup.php init                       create the database schema
-      php setup.php <name> <phone>             add a user (sends a welcome message)
-      php setup.php add <name> <phone>         add a user
+      php setup.php <name> <contact>           add a user (sends a welcome message)
+      php setup.php add <name> <contact>       add a user
                     [--no-message]             ... without the welcome message
       php setup.php list                       list users
-      php setup.php remove <phone>             delete a user
+      php setup.php remove <contact>           delete a user
       php setup.php check                      verify the whole deployment
 
     TXT;
 }
 
 /**
- * Greet a newly registered user over WhatsApp.
+ * Greet a newly registered user.
  *
- * This has to be a template message: the person has never written to us, so
- * there is no open 24-hour service window and Meta would refuse free-form
- * text. It follows that an unapproved template is the likeliest reason for a
- * failure here.
+ * This is a notification rather than a reply: the person has never written to
+ * us. On WhatsApp that means an approved template is mandatory, which makes an
+ * unapproved template the likeliest reason for a failure there.
  *
  * A failure is reported but never fatal - the account exists either way, and
  * the user can simply message the bot to get going.
@@ -75,23 +86,26 @@ function sendWelcome(array $user, bool $skip): void
         return;
     }
 
-    if (!WhatsApp::isConfigured()) {
-        echo "No welcome message sent: WhatsApp is not configured yet "
-           . "(META_TOKEN / META_PHONE_NUMBER_ID).\n";
+    if (!Messenger::isConfigured()) {
+        echo "No welcome message sent: the '" . Messenger::name()
+           . "' transport is not configured yet.\n";
         return;
     }
 
-    $result = WhatsApp::sendTemplate($user['phone'], Messages::welcome($user['name']));
+    $result = Messenger::notify(Messenger::addressFor($user), Messages::welcome($user['name']));
 
     if ($result['ok']) {
         echo "Welcome message sent.\n";
         return;
     }
 
-    $template = (string)PV\Env::get('META_TEMPLATE_NAME', 'pv_update');
     echo "Could not send the welcome message (HTTP {$result['status']}): {$result['body']}\n";
-    echo "The account works regardless. Check that the template '{$template}' is approved "
-       . "and that META_TOKEN is a non-expiring System User token.\n";
+    echo "The account works regardless.\n";
+    if (Messenger::name() === 'whatsapp') {
+        $template = (string)PV\Env::get('META_TEMPLATE_NAME', 'pv_update');
+        echo "Check that the template '{$template}' is approved and that META_TOKEN "
+           . "is a non-expiring System User token.\n";
+    }
 }
 
 /**
@@ -183,6 +197,33 @@ function runCheck(): int
         $ok('webhook URL', rtrim($portal, '/') . '/webhook');
     }
 
+    echo "\nMessaging\n";
+    try {
+        $transport = Messenger::transport();
+        $transport->isConfigured()
+            ? $ok('transport', $transport->name() . ' (ready)')
+            : $bad('transport', $transport->name() . ' is selected but not configured');
+    } catch (Throwable $e) {
+        $bad('transport', $e->getMessage());
+        $transport = null;
+    }
+
+    if ($transport === null || $transport->name() !== 'whatsapp') {
+        $rate = (float)PV\Env::get('PV_EUR_PER_KWH', 0);
+        $rate > 0
+            ? $ok('tariff', $rate . ' per kWh')
+            : $warn('tariff', 'PV_EUR_PER_KWH not set - money figures will be omitted');
+
+        printf(
+            "\n%s  (%d problem%s, %d warning%s)\n\n",
+            $problems === 0 ? 'Ready.' : 'Not ready yet.',
+            $problems, $problems === 1 ? '' : 's',
+            $warnings, $warnings === 1 ? '' : 's'
+        );
+
+        return $problems === 0 ? 0 : 1;
+    }
+
     echo "\nWhatsApp\n";
     foreach ([
         'META_TOKEN'           => 'App > WhatsApp > API Setup (use a System User token)',
@@ -255,9 +296,9 @@ switch ($command) {
             echo "No users yet. Add one: php setup.php \"Name\" +49151...\n";
             break;
         }
-        printf("%-4s %-24s %-18s %s\n", 'ID', 'NAME', 'PHONE', 'CREATED');
+        printf("%-4s %-24s %-26s %s\n", 'ID', 'NAME', 'CONTACT', 'CREATED');
         foreach ($users as $user) {
-            printf("%-4d %-24s %-18s %s\n", $user['id'], $user['name'], '+' . $user['phone'], $user['created_at']);
+            printf("%-4d %-24s %-26s %s\n", $user['id'], $user['name'], contactOf($user), $user['created_at']);
         }
         break;
 
@@ -295,7 +336,7 @@ switch ($command) {
             fail($e->getMessage());
         }
 
-        echo "Added {$user['name']} (+{$user['phone']}).\n";
+        echo "Added {$user['name']} (" . contactOf($user) . ").\n";
         echo "They can now message the bot and request a portal link.\n";
 
         sendWelcome($user, in_array('--no-message', $argv, true));
