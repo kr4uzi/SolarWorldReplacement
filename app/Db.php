@@ -112,6 +112,13 @@ final class Db
             $created[] = 'users.address';
         }
 
+        // Users reached by address have no phone number. It has to be NULL
+        // rather than '': the unique index treats every empty string as the
+        // same value, so a second address-only user could not be stored, and
+        // an empty lookup would match the first one.
+        self::conn()->exec('ALTER TABLE users MODIFY phone VARCHAR(20) NULL');
+        self::conn()->exec("UPDATE users SET phone = NULL WHERE phone = ''");
+
         return $created;
     }
 

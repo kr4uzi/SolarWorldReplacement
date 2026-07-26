@@ -93,6 +93,20 @@ final class Messages
         return 'Was möchtest du sehen?';
     }
 
+    /** Menu as plain text, for transports without a native menu widget. */
+    public static function menuText(): string
+    {
+        return implode("\n", [
+            self::menuBody(),
+            '',
+            '  Portal        – Zugang zum Dashboard',
+            '  Monatsertrag  – Ertrag im laufenden Monat',
+            '  Jahresertrag  – Ertrag im laufenden Jahr',
+            '',
+            'Antworte einfach mit dem Stichwort.',
+        ]);
+    }
+
     public static function currentMonth(): string
     {
         $sum   = Data::sumMonth((int)date('n'), (int)date('Y'));

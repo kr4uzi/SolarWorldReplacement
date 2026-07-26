@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace PV;
 
+use PV\Transport\Birdy;
 use PV\Transport\Http;
 use PV\Transport\LogFile;
 use PV\Transport\Transport;
@@ -24,6 +25,7 @@ final class Messenger
     {
         return [
             'whatsapp' => WhatsApp::class,
+            'birdy'    => Birdy::class,
             'http'     => Http::class,
             'log'      => LogFile::class,
         ];

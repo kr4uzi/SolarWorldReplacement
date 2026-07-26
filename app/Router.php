@@ -21,6 +21,7 @@ final class Router
     public const AUTH_PUBLIC    = 'public';     // no credentials needed
     public const AUTH_SESSION   = 'session';    // signed-in portal user
     public const AUTH_SIGNATURE = 'signature';  // signed by Meta
+    public const AUTH_BIRDY     = 'birdy';      // shared secret or HMAC from BirdyChat
 
     private static ?string $rawBody = null;
 
@@ -32,7 +33,8 @@ final class Router
             'api'     => [Controller\Api::class,       self::AUTH_SESSION],
             'login'   => [Controller\Login::class,     self::AUTH_PUBLIC],
             'logout'  => [Controller\Logout::class,    self::AUTH_PUBLIC],
-            'webhook' => [Controller\Webhook::class,   self::AUTH_SIGNATURE],
+            'webhook'       => [Controller\Webhook::class,      self::AUTH_SIGNATURE],
+            'birdy-webhook' => [Controller\BirdyWebhook::class, self::AUTH_BIRDY],
         ];
     }
 
@@ -130,6 +132,10 @@ final class Router
             return true;
         }
 
+        if ($policy === self::AUTH_BIRDY) {
+            return self::authorizeBirdy();
+        }
+
         // AUTH_SIGNATURE. Meta's one-time verification handshake arrives as a
         // GET with no body to sign, so the controller validates that itself
         // against the verify token; only real events are signed.
@@ -152,6 +158,46 @@ final class Router
 
         if (!hash_equals($expected, $provided)) {
             self::fail(403, 'Forbidden', 'signature mismatch');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * BirdyChat's endpoint, verified by shared secret or HMAC.
+     *
+     * Which of the two is used is configuration rather than a guess: set
+     * BIRDY_WEBHOOK_SIGNATURE_MODE to 'plain' when the provider sends the
+     * secret verbatim in a header, or 'hmac-sha256' when it signs the body.
+     * Refusing to run unconfigured is deliberate - an unauthenticated inbound
+     * endpoint would let anyone drive the bot.
+     */
+    private static function authorizeBirdy(): bool
+    {
+        if (self::isDiagnostic()) {
+            return true;
+        }
+
+        $secret = (string)Env::get('BIRDY_WEBHOOK_SECRET', '');
+        if ($secret === '') {
+            self::fail(500, 'Webhook rejected', 'BIRDY_WEBHOOK_SECRET is not configured');
+            return false;
+        }
+
+        $header   = (string)Env::get('BIRDY_WEBHOOK_SECRET_HEADER', 'X-Birdy-Signature');
+        $key      = 'HTTP_' . strtoupper(str_replace('-', '_', $header));
+        $provided = (string)($_SERVER[$key] ?? '');
+
+        $expected = strtolower((string)Env::get('BIRDY_WEBHOOK_SIGNATURE_MODE', 'plain')) === 'hmac-sha256'
+            ? hash_hmac('sha256', self::rawBody(), $secret)
+            : $secret;
+
+        // Tolerate providers that prefix the digest, e.g. 'sha256=<hex>'.
+        $provided = preg_replace('/^sha256=/i', '', $provided) ?? $provided;
+
+        if (!hash_equals($expected, $provided)) {
+            self::fail(403, 'Forbidden', 'webhook secret mismatch');
             return false;
         }
 

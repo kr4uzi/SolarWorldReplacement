@@ -119,6 +119,7 @@ through `Messenger`, which resolves the transport named in
 | Transport | Purpose |
 |---|---|
 | `whatsapp` | Meta Cloud API - needs the `META_*` settings and an approved template |
+| `birdy` | BirdyChat - `BIRDY_*` settings, with its own webhook at `/birdy-webhook` |
 | `http` | Posts to any HTTP endpoint you describe in `.env` |
 | `log` | Writes messages to a file instead of sending them |
 
@@ -135,6 +136,35 @@ alert and the welcome message all run, and you read what would have been sent:
 
 That makes it useful while a provider is undecided or its onboarding is stuck,
 and afterwards for reproducing a problem without messaging real people.
+
+### BirdyChat
+
+Users are addressed by their BirdyChat address, and get their own inbound
+endpoint at `/birdy-webhook` - separate from the Meta one, because the two
+authenticate differently and their payloads share no structure.
+
+```bash
+php setup.php "Markus" markus@example.com
+```
+
+The request and payload shapes are configuration rather than code, since they
+have to be confirmed against BirdyChat's own documentation. To find the inbound
+shape, set `WEBHOOK_DIAG_KEY`, send a message to the bot, and probe:
+
+```bash
+curl -X POST "https://example.com/pv/birdy-webhook?diag=THE_KEY" \
+     -H 'Content-Type: application/json' -d '{}'
+```
+
+The reply echoes the delivery, shows which dotted paths were tried, what they
+resolved to, and a verdict naming what to fix. Point
+`BIRDY_INBOUND_SENDER_PATH` and `BIRDY_INBOUND_TEXT_PATH` at the right keys and
+the connector works without a code change.
+
+The webhook refuses to run until `BIRDY_WEBHOOK_SECRET` is set, since an
+unauthenticated inbound URL would let anyone drive the bot. Use
+`BIRDY_WEBHOOK_SIGNATURE_MODE = "plain"` when the secret arrives verbatim in a
+header, or `"hmac-sha256"` when the body is signed.
 
 ### The `http` transport
 

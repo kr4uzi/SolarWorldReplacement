@@ -26,10 +26,19 @@ final class Auth
 
     public static function userByPhone(string $phone): ?array
     {
+        $digits = self::normalizePhone($phone);
+
+        // Never match on an empty number. Anything without digits - an email
+        // address, a display name - normalises to '', and matching that would
+        // hand an unregistered sender somebody else's account.
+        if ($digits === '') {
+            return null;
+        }
+
         $statement = Db::conn()->prepare(
             'SELECT * FROM users WHERE phone = ? AND is_active = 1 LIMIT 1'
         );
-        $statement->execute([self::normalizePhone($phone)]);
+        $statement->execute([$digits]);
 
         return $statement->fetch() ?: null;
     }
@@ -62,7 +71,7 @@ final class Auth
 
         if ($isAddress) {
             $address = trim($contact);
-            $digits  = '';
+            $digits  = null;
             if (self::userByAddress($address) !== null) {
                 throw new \RuntimeException("A user with address {$address} already exists");
             }
@@ -87,6 +96,10 @@ final class Auth
 
     public static function userByAddress(string $address): ?array
     {
+        if (trim($address) === '') {
+            return null;
+        }
+
         $statement = Db::conn()->prepare(
             'SELECT * FROM users WHERE address = ? AND is_active = 1 LIMIT 1'
         );
@@ -98,8 +111,15 @@ final class Auth
     /** Accepts either a phone number or an address. */
     public static function removeUser(string $contact): bool
     {
-        $statement = Db::conn()->prepare('DELETE FROM users WHERE phone = ? OR address = ?');
-        $statement->execute([self::normalizePhone($contact), trim($contact)]);
+        $digits  = self::normalizePhone($contact);
+        $address = trim($contact);
+
+        // NULL-safe, and never matches on an empty value.
+        $statement = Db::conn()->prepare(
+            'DELETE FROM users
+             WHERE (? <> \'\' AND phone = ?) OR (? <> \'\' AND address = ?)'
+        );
+        $statement->execute([$digits, $digits, $address, $address]);
 
         return $statement->rowCount() > 0;
     }
