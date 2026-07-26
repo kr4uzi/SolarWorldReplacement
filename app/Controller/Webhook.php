@@ -54,10 +54,22 @@ final class Webhook implements Handler
         $challenge = (string)($_GET['hub_challenge']    ?? $_GET['hub.challenge']    ?? '');
 
         if ($mode === 'subscribe' && $expected !== '' && hash_equals($expected, $token)) {
+            $this->log('handshake accepted');
             header('Content-Type: text/plain; charset=utf-8');
             echo $challenge;
             return;
         }
+
+        // Meta reports every failure as the same opaque message, so record why
+        // it was rejected here. The tokens themselves are never written out.
+        $this->log(sprintf(
+            'handshake REJECTED: mode=%s, %s, challenge=%s',
+            $mode === '' ? '(none)' : $mode,
+            $expected === ''
+                ? 'META_VERIFY_TOKEN is not set'
+                : ($token === '' ? 'no token supplied' : 'token does not match META_VERIFY_TOKEN'),
+            $challenge === '' ? 'missing' : 'present'
+        ));
 
         http_response_code(403);
         echo 'Forbidden';

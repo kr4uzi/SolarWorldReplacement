@@ -293,6 +293,15 @@ controller as the router, so the same URLs work without Apache.
 - **Solution**: Confirm the number is registered (`php setup.php list`) and
   that `META_APP_SECRET` matches the app - a signature mismatch returns 403.
 
+**Issue**: Meta rejects the webhook with "The callback URL or verify token
+could not be validated"
+- **Solution**: That message is the same for every cause, so find out whether
+  Meta reached you at all: `grep webhook /var/log/apache2/access.log`. No entry
+  means DNS, a firewall or an invalid certificate; `401` means HTTP auth is
+  still in front of the endpoint; `404` means `mod_rewrite` is inactive; `403`
+  means the token did not match. Set `PV_WEBHOOK_LOG` in `.env` and the
+  handshake records precisely which of those it was.
+
 ## License
 
 This is a custom application for photovoltaic data visualization.
