@@ -4,10 +4,12 @@
  * Provides JSON endpoints for photovoltaic data visualization
  */
 
+require_once __DIR__ . '/pv_data.php';
+
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 
-$dataDir = './data/';
+$dataDir = pvDataDir();
 
 // Get request parameters
 $view = isset($_GET['view']) ? $_GET['view'] : '';
@@ -39,54 +41,12 @@ function parseCSV($filepath, $skipHeader = true) {
 }
 
 /**
- * Parse base_vars.js to extract inverter configuration
+ * Inverter configuration, delegated to the shared data layer so the dashboard,
+ * the cron job and the WhatsApp bot all resolve inverter names identically.
  */
 function getInverterConfig($dataDir) {
-    $filepath = $dataDir . 'base_vars.js';
-    if (!file_exists($filepath)) {
-        return ['count' => 2, 'inverters' => [['id' => 0, 'name' => 'WR 1'], ['id' => 1, 'name' => 'WR 2']]];
-    }
-
-    $content = file_get_contents($filepath);
-
-    // Extract AnzahlWR (number of inverters)
-    $count = 2; // default
-    if (preg_match('/var\s+AnzahlWR\s*=\s*(\d+)/', $content, $matches)) {
-        $count = (int)$matches[1];
-    }
-
-    // Extract WRInfo for each inverter
-    $inverters = [];
-    for ($i = 0; $i < $count; $i++) {
-        // Pattern: WRInfo[N]=new Array("type","serial",power,?,??NAME"?,...)
-        // The name is typically at index 4 in the array
-        $pattern = '/WRInfo\[' . $i . '\]\s*=\s*new\s+Array\s*\((.*?)\)/s';
-        if (preg_match($pattern, $content, $matches)) {
-            // Parse the array content
-            $arrayContent = $matches[1];
-            // Split by comma, but respect quotes
-            preg_match_all('/"([^"]*)"/', $arrayContent, $stringMatches);
-
-            // Name is typically the 5th element (index 4)
-            $name = isset($stringMatches[1][4]) ? $stringMatches[1][4] : "WR " . ($i + 1);
-
-            $inverters[] = [
-                'id' => $i,
-                'name' => $name,
-                'type' => isset($stringMatches[1][0]) ? $stringMatches[1][0] : '',
-                'serial' => isset($stringMatches[1][1]) ? $stringMatches[1][1] : ''
-            ];
-        } else {
-            $inverters[] = [
-                'id' => $i,
-                'name' => "WR " . ($i + 1),
-                'type' => '',
-                'serial' => ''
-            ];
-        }
-    }
-
-    return ['count' => $count, 'inverters' => $inverters];
+    $config = pvInverterConfig();
+    return ['count' => $config['count'], 'inverters' => $config['inverters']];
 }
 
 /**
@@ -267,7 +227,9 @@ function getDailyData($dataDir, $days = 7, $endDate = null) {
     // Convert to array and sort by date (newest first)
     $result = array_values($dailyMap);
     usort($result, function($a, $b) {
-        return strtotime(str_replace('.', '/', $b['date'])) - strtotime(str_replace('.', '/', $a['date']));
+        // dd.mm.yy must be parsed explicitly: str_replace('.','/') makes strtotime
+        // read it as US m/d/y, which mis-sorts and fails outright past the 12th.
+        return pvParseDate($b['date']) - pvParseDate($a['date']);
     });
 
     // Get last N days
@@ -314,7 +276,9 @@ function getWeeklyData($dataDir, $weekOffset = 0) {
     // Sort by date
     $allDays = array_values($dailyMap);
     usort($allDays, function($a, $b) {
-        return strtotime(str_replace('.', '/', $b['date'])) - strtotime(str_replace('.', '/', $a['date']));
+        // dd.mm.yy must be parsed explicitly: str_replace('.','/') makes strtotime
+        // read it as US m/d/y, which mis-sorts and fails outright past the 12th.
+        return pvParseDate($b['date']) - pvParseDate($a['date']);
     });
 
     // Get 7 days starting from weekOffset

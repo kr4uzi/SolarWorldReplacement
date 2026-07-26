@@ -1,0 +1,11 @@
+# Keep secrets and state out of the web.
+# Apache only - on nginx add an equivalent "location ~ /\.env { deny all; }".
+
+<FilesMatch "^\.env">
+    Require all denied
+</FilesMatch>
+
+# The logger's upload directory also holds pv_state.json.
+<FilesMatch "^pv_state\.json$">
+    Require all denied
+</FilesMatch>

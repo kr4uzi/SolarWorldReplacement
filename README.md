@@ -25,6 +25,12 @@ A PHP-based single-page application for visualizing photovoltaic (solar panel) e
 pv/
 ├── index.php           # Main dashboard (frontend)
 ├── api.php            # Data API (backend)
+├── pv_data.php        # Shared data layer (CSV/JS parsing, aggregation)
+├── pv_messages.php    # Message formatting (kWh + money)
+├── pv_whatsapp.php    # WhatsApp Cloud API transport
+├── pv_daily.php       # Daily 12:15 cron: fault alerts + period reports
+├── webhook.php        # WhatsApp bot (inbound menu)
+├── .env.example       # Configuration template
 ├── data/              # Data directory (uploaded via FTP)
 │   ├── min{YYMMDD}.csv    # Minute-level data files
 │   ├── days.csv            # Daily aggregated data
@@ -105,46 +111,90 @@ The application provides the following JSON API endpoints:
 
 All data endpoints return inverter-specific values as `wr0`, `wr1`, `wr2`, etc. (dynamically based on inverter count).
 
-## Zero-Day Detection & Alerts
+## Monitoring & WhatsApp Bot
 
-`zero_day_check.php` monitors production and sends a warning when something looks wrong. It checks yesterday's entries in `data/days.csv` and detects:
+Two pieces sit on top of the dashboard data:
 
-- **Zero day**: the whole plant produced less than a configurable threshold (default: 100 Wh)
-- **Inverter fault**: a single inverter reported 0 Wh while the rest of the plant produced normally
-- **Logger offline**: no new data has been uploaded for N days (default: 2), or `days.csv` is missing entirely
+- **`pv_daily.php`** - a cron job that runs once a day at 12:15 and warns you when the plant is not producing.
+- **`webhook.php`** - a WhatsApp bot you can message any time to pull up current figures.
 
-Alerts are sent via **email** (PHP's built-in `mail()`) and/or **WhatsApp** (a single HTTPS request) - no external libraries required. Each alert is sent only once (tracked in `data/zero_day_state.json`), so the script can safely run as often as you like. If a channel fails to deliver, the alert is retried on the next run.
+Both read through `pv_data.php`, the shared data layer, so the dashboard, the cron and the bot always agree on the numbers.
 
-### Setup
+### What the daily job does
 
-1. Open `zero_day_check.php` and edit the `$config` block at the top:
-   - `notify_email` - the email address to receive warnings (leave empty to disable)
-   - `whatsapp_phone` / `whatsapp_apikey` - WhatsApp alerts (leave empty to disable, see below)
-   - `min_day_wh` / `max_data_age_days` - detection thresholds
-2. Schedule a daily run, either via cron:
-   ```bash
-   15 6 * * * php /path/to/pv/zero_day_check.php
-   ```
-   or, on shared hosting without cron access, set `http_key` to a secret and use a web-cron service to call:
-   ```
-   https://example.com/pv/zero_day_check.php?key=YOUR_SECRET
-   ```
-   (HTTP access is denied unless the key matches; with an empty `http_key`, the script runs via CLI only.)
+At 12:15 (local time, see `PV_TIMEZONE`) it applies exactly three rules:
 
-### WhatsApp Alerts
+| Condition | Action |
+|---|---|
+| No power | Alert |
+| 1st of a month | Send last month's total |
+| 1 January | Send last year's total, plus December's |
+| Anything else | Stay quiet |
 
-WhatsApp alerts use [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/), a free relay for personal notifications. Setup takes about two minutes and needs no Meta account:
+Midday is deliberate. By 12:15 a working plant has banked real energy on any day of the year, so "still at zero" is a reliable fault signal - and you hear about it the same day rather than the next morning. Three distinct faults are detected:
 
-1. Save **+34 644 20 47 56** in your phone's contacts (e.g. as "CallMeBot").
-2. Send that contact the exact WhatsApp message: `I allow callmebot to send me messages`
-3. The bot replies with your personal API key.
-4. Put your own number (with country code, e.g. `+41791234567`) in `whatsapp_phone` and the key in `whatsapp_apikey`.
+- **No power**: energy accumulated since midnight is below `PV_MIN_MIDDAY_WH` (default 100 Wh)
+- **Logger offline**: the newest live reading is older than `PV_MAX_DATA_AGE_MINUTES` (default 60)
+- **Inverter offline**: one inverter sits at zero while the rest of the plant produces normally
 
-The script posts to CallMeBot with cURL, falling back to `file_get_contents()` on hosts without the cURL extension.
+Accumulated energy is used rather than momentary power on purpose: a single 5-minute sample can read zero for harmless reasons (a brief grid dropout, an inverter restart), while energy-since-midnight is smooth.
 
-**Trade-offs:** CallMeBot is free and licensed for personal use only (you can notify yourself, not customers), and alert text passes through a third-party server. It is not an official WhatsApp product, so it carries no delivery guarantee - keep email enabled as a backup if the alerts matter.
+Delivery is tracked **per recipient**, so a person who could not be reached is retried on the next run without re-sending to everyone who already got the message. Running the job more often than once a day is therefore safe.
 
-**Why not the official WhatsApp Business Cloud API?** These alerts are *business-initiated*, which is Meta's paid category. Free service conversations and free utility templates both require an open 24-hour window started by *you* messaging the number, which a scheduled fault alert cannot rely on. Since Meta moved to per-message billing (July 1, 2025), a real sender number also requires business verification, an approved message template, a payment method on file, and a non-expiring System User token for unattended cron use. Meta's free *test* number sends at no cost to up to 5 OTP-verified recipients, so it is a workable upgrade path if you want the official route - but it still needs the app, template, and token setup above, and Meta may rotate test numbers.
+Schedule it with cron:
+
+```bash
+15 12 * * * php /path/to/pv/pv_daily.php
+```
+
+On hosting without cron, set `PV_CRON_KEY` and have a web-cron service call `https://example.com/pv/pv_daily.php?key=YOUR_SECRET`. Without a matching key the endpoint returns 403, and with no key configured it runs from the CLI only.
+
+### The bot
+
+Message the business number and you get a menu; pick an entry and the figures come back in kWh and money:
+
+```
+📅 July 2026 (month to date)
+   1,842 kWh · € 221.04
+   Dach Sued  980 kWh
+   Dach West  862 kWh
+
+   Best day: 24.07.26 · 78 kWh
+```
+
+The menu offers **Today**, **Last 7 days**, **This month** and **This year**. Typing works too - `today`, `week`, `month`, `year` (and the German `heute`, `woche`, `monat`, `jahr`), with or without a leading slash. Anything unrecognised brings the menu back.
+
+These replies are free: you started the conversation, which opens a 24-hour service window in which free-form messages cost nothing. The daily alerts and reports are *business-initiated*, which is Meta's billable category and requires an approved template.
+
+### WhatsApp setup
+
+You need a Meta Business account and a phone number that is **not** already registered to consumer WhatsApp.
+
+1. Create an app at [developers.facebook.com](https://developers.facebook.com/) and add the **WhatsApp** product.
+2. Register your sender number and complete business verification.
+3. Create a **utility** message template with a single body placeholder, e.g. `PV Monitor update: {{1}}`, and wait for approval. Put its name in `WHATSAPP_TEMPLATE_NAME`.
+4. Create a **System User** and generate a permanent access token - the default token from API Setup expires after 24 hours and will silently break the cron job.
+5. Deploy the files and copy `.env.example` to `.env`, filling in the token, phone number ID, recipients and allowed senders.
+6. Point Meta's webhook at `https://example.com/pv/webhook.php`, using the same string you put in `WHATSAPP_VERIFY_TOKEN`, and subscribe to the `messages` field.
+
+### Configuration
+
+All settings live in `.env` (see `.env.example`), read with PHP's built-in `parse_ini_file()` - no library required. Real environment variables override the file, so a hosting panel can take precedence.
+
+**Keep `.env` out of the web root.** It holds your access token. The bundled `.htaccess` blocks it on Apache; on nginx add `location ~ /\.env { deny all; }`, or move the file above the document root and point `PV_ENV_PATH` at it.
+
+### Money figures
+
+`PV_EUR_PER_KWH` is applied to gross production. The logger records what the panels generated, and cannot distinguish self-consumed kWh (which save the retail price) from exported kWh (which earn the feed-in tariff) - these usually differ by a factor of two or more. A single blended rate is a reasonable approximation, but treat the result as indicative rather than accounting. `PV_CURRENCY` sets the symbol if CHF suits you better than €.
+
+### Security
+
+The webhook is a public URL, so it is locked down two ways:
+
+- Payload signatures are checked against `WHATSAPP_APP_SECRET`, rejecting anything not signed by Meta.
+- Only numbers listed in `WHATSAPP_ALLOWED_SENDERS` get a reply. Anyone else is ignored silently, so the bot does not confirm the number exists.
+
+Leaving the sender list empty disables the bot entirely. That is intentional - without it, anyone who found the number could read your production data.
 
 ## Technology Stack
 
