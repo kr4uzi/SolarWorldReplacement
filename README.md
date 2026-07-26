@@ -172,6 +172,21 @@ Authentication is the secret token Telegram echoes back on every delivery.
 The webhook refuses to run until one is set, so the endpoint cannot be left
 open by accident.
 
+The endpoint is `PORTAL_URL` + `/telegram-webhook`, and Telegram only learns
+about it when you run `telegram-webhook` - until then the bot receives nothing
+and tapping **START** appears to do nothing at all.
+
+When it looks dead, ask Telegram rather than guessing:
+
+```bash
+php setup.php telegram-status
+```
+
+It prints the URL Telegram is delivering to, how many updates are queued, and
+why the last delivery failed - which separates "never registered" from
+"registered at a stale URL" from "registered but rejected", and names the
+likely cause for each HTTP status.
+
 ### BirdyChat
 
 Users are addressed by their BirdyChat address, and get their own inbound

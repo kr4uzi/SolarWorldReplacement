@@ -10,6 +10,7 @@ declare(strict_types=1);
  *   php setup.php list                      show all accounts
  *   php setup.php remove +49151...          delete an account and its tokens
  *   php setup.php check                     verify the whole deployment
+ *   php setup.php telegram-status           ask Telegram about the webhook
  *
  * Adding a user sends them a welcome message over the configured transport.
  * Pass --no-message to skip it; it is skipped automatically while that
@@ -85,6 +86,7 @@ function usage(): void
     Telegram:
       php setup.php invite <name>              create a user and print their invite link
       php setup.php telegram-webhook           register this site's webhook with Telegram
+      php setup.php telegram-status            ask Telegram what it thinks the webhook is
 
     TXT;
 }
@@ -187,6 +189,65 @@ function runTelegramWebhook(): int
     }
 
     echo "Registered. Users can now message the bot.\n";
+
+    return 0;
+}
+
+/**
+ * Ask Telegram what it currently knows about the webhook.
+ *
+ * This is the only view of the half of the round trip that happens outside
+ * this server: Telegram records why its last delivery failed, which is the
+ * difference between "never registered", "registered at the wrong URL" and
+ * "registered but rejected".
+ */
+function runTelegramStatus(): int
+{
+    $result = PV\Transport\Telegram::call('getWebhookInfo', []);
+    if (!$result['ok']) {
+        echo "Could not ask Telegram (HTTP {$result['status']}): {$result['body']}\n";
+        return 1;
+    }
+
+    $info     = json_decode($result['body'], true)['result'] ?? [];
+    $expected = PV\Router::url('telegram-webhook');
+    $current  = (string)($info['url'] ?? '');
+
+    printf("  %-22s %s\n", 'expected URL', $expected);
+    printf("  %-22s %s\n", 'registered URL', $current === '' ? '(none)' : $current);
+    printf("  %-22s %s\n", 'pending updates', (string)($info['pending_update_count'] ?? 0));
+
+    if (isset($info['last_error_message'])) {
+        printf("  %-22s %s\n", 'last error',
+            date('d.m.y H:i', (int)($info['last_error_date'] ?? 0)) . ' - ' . $info['last_error_message']);
+    }
+    echo "\n";
+
+    if ($current === '') {
+        echo "No webhook registered, so Telegram has nowhere to deliver and the bot\n";
+        echo "will never answer. Register it: php setup.php telegram-webhook\n";
+        return 1;
+    }
+
+    if ($current !== $expected) {
+        echo "Telegram is delivering somewhere else. Either PORTAL_URL changed or the\n";
+        echo "webhook was registered from a different installation - re-register:\n";
+        echo "  php setup.php telegram-webhook\n";
+        return 1;
+    }
+
+    if (isset($info['last_error_message'])) {
+        echo "Telegram is reaching out but the delivery failed - see the error above.\n";
+        echo "  403  the secret token does not match TELEGRAM_WEBHOOK_SECRET\n";
+        echo "  404  mod_rewrite is not routing /telegram-webhook into System.php\n";
+        echo "  500  a PHP error - check the server's error log\n";
+        echo "  SSL  the certificate is not one Telegram accepts\n";
+        return 1;
+    }
+
+    echo (int)($info['pending_update_count'] ?? 0) > 0
+        ? "Registered and reachable, with updates queued - they should arrive shortly.\n"
+        : "Registered, reachable, and nothing queued. The bot is live.\n";
 
     return 0;
 }
@@ -427,6 +488,10 @@ if ($command === 'invite') {
 
 if ($command === 'telegram-webhook') {
     exit(runTelegramWebhook());
+}
+
+if ($command === 'telegram-status') {
+    exit(runTelegramStatus());
 }
 
 if (in_array($command, ['', '-h', '--help', 'help'], true)) {
