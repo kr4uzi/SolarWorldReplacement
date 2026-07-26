@@ -1,0 +1,2 @@
+# Application source is included by System.php, never requested directly.
+Require all denied

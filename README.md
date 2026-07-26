@@ -1,9 +1,12 @@
 # PV Data Logger - Web Visualization
 
-A PHP-based single-page application for visualizing photovoltaic (solar panel) energy production data. Automatically adapts to support any number of inverters.
+A PHP application for photovoltaic monitoring: a web dashboard behind WhatsApp-based login, a WhatsApp bot for on-demand figures, and a scheduled job that reports monthly totals and alerts when the plant stops producing. Automatically adapts to support any number of inverters.
 
 ## Features
 
+- **WhatsApp Login**: No passwords - a one-time link from the bot opens the portal
+- **WhatsApp Bot**: German menu for month and year totals, in kWh and money
+- **Monitoring**: Monthly report on the 1st, and an alert when the plant stops producing
 - **Real-time Dashboard**: Shows today's, this month's, and this year's energy production
 - **Multiple Time Views**:
   - **Hourly View**: Today's power output by hour
@@ -23,94 +26,208 @@ A PHP-based single-page application for visualizing photovoltaic (solar panel) e
 
 ```
 pv/
-├── index.php           # Main dashboard (frontend)
-├── api.php            # Data API (backend)
-├── data/              # Data directory (uploaded via FTP)
-│   ├── min{YYMMDD}.csv    # Minute-level data files
-│   ├── days.csv            # Daily aggregated data
-│   ├── months.csv          # Monthly aggregated data
-│   ├── years.csv           # Yearly aggregated data
-│   └── base_vars.js        # System configuration
-└── README.md          # This file
+├── System.php          # Front controller - the only web entry point
+├── setup.php           # CLI: schema + user accounts
+├── job.php             # CLI: runs every 15 minutes
+├── .htaccess           # Rewrites everything into System.php
+├── .env                # Configuration and secrets (never served)
+├── app/
+│   ├── bootstrap.php   # Autoloader, config, timezone
+│   ├── Router.php      # Route table and per-route auth policy
+│   ├── Env.php         # .env loader
+│   ├── Db.php          # MySQL connection and schema
+│   ├── Auth.php        # Accounts, one-time tokens, sessions
+│   ├── Data.php        # Reads the logger's CSV/JS files
+│   ├── Messages.php    # German user-facing text
+│   ├── WhatsApp.php    # Meta Cloud API client
+│   └── Controller/     # Dashboard, Api, Login, Logout, Webhook
+├── views/              # dashboard.php, denied.php
+└── data/               # Logger uploads (FTP target)
 ```
 
-## Data Format
+## Architecture
 
-The application reads CSV files from the `./data` directory:
+Every web request is rewritten into `System.php`, which resolves a route and
+applies that route's authentication policy before any controller runs. Nothing
+under `app/` or `views/` is reachable directly, so authentication cannot be
+bypassed by requesting a file.
 
-- **min{YYMMDD}.csv**: 5-minute interval data with power readings
-- **days.csv**: Daily totals (Psum in Wh, Pmax in W)
-- **months.csv**: Monthly totals (Pges in Wh)
-- **years.csv**: Yearly totals (Pges in Wh)
+The three policies exist because one global gate would not work:
 
-All energy values are automatically converted from Wh to kWh for display.
+| Route | Policy | Why |
+|---|---|---|
+| `/` and `/api` | `session` | Portal users, signed in via WhatsApp |
+| `/login`, `/logout` | `public` | Must be reachable *before* a session exists |
+| `/webhook` | `signature` | Meta is not a user and can never hold a session; it proves itself with an HMAC |
 
-## Dynamic Inverter Configuration
+MySQL holds accounts, login tokens and scheduling state only. Production
+figures continue to be read from the logger's own files through `Data`, so
+there is nothing to import, backfill or keep in sync.
 
-The application automatically reads the inverter configuration from `data/base_vars.js`:
+## Access & Login
 
-- **AnzahlWR**: Number of inverters in the system
-- **WRInfo**: Array containing inverter details (name, type, serial number)
+There are no passwords. A user record is the only thing that grants access, and
+the same row decides both who the bot answers and who can open the portal.
 
-The dashboard will:
-- Display the actual inverter names in charts and legends
-- Generate distinct colors for each inverter (supports up to 8 inverters with unique colors)
-- Adapt all visualizations to show N inverters dynamically
-- Update the subtitle to show the correct number of inverters
-
-### Example Configuration
-
-```javascript
-var AnzahlWR = 2
-var WRInfo = new Array(AnzahlWR)
-WRInfo[0] = new Array("WRTP4649","2110165900",15000,1,"WR 1",...)
-WRInfo[1] = new Array("WRTP4642","2110215788",15000,1,"WR 2",...)
+```bash
+php setup.php init                        # create the schema
+php setup.php "Markus" +4915112345678     # add a user
+php setup.php list
+php setup.php remove +4915112345678
 ```
 
-The system will automatically detect 2 inverters named "WR 1" and "WR 2".
+`setup.php` refuses to run over the web, and `.htaccess` denies it as well.
+
+Logging in works like this:
+
+1. The user messages the bot and picks **Portal**.
+2. A single-use token is minted; only its SHA-256 hash is stored, so a database
+   leak yields nothing usable.
+3. The link arrives on WhatsApp and is valid for `LOGIN_TOKEN_TTL_MINUTES`.
+4. Opening it starts a session and immediately redirects, which strips the
+   token from the address bar, the browser history and any `Referer` header.
+
+Requesting a new link invalidates any previous one, so an old link sitting in
+the chat history stops working.
+
+Because the link travels over WhatsApp, whoever holds the phone can sign in.
+That is inherent to the design and fine for a household, but it is why the
+tokens are short-lived and single-use - and why the portal should be HTTPS
+only, since the token travels in a URL.
+
+## The Bot
+
+Message the business number and the German menu appears:
+
+| Option | Shows |
+|---|---|
+| **Portal** | A one-time login link to the dashboard |
+| **Monatsertrag** | Current month, in kWh and money |
+| **Jahresertrag** | Current year, in kWh and money |
+
+Typed words work too - `portal`, `monat`, `jahr` (and `month`/`year`), with or
+without a leading slash. Anything unrecognised brings the menu back. Numbers
+that are not registered are ignored silently rather than told they lack access,
+which avoids confirming the number is live.
+
+Menu replies are free: the user opens a 24-hour service window by writing
+first, and free-form messages inside it cost nothing. The scheduled messages
+below are business-initiated, which is Meta's billable category and needs an
+approved template.
+
+## The Job
+
+`job.php` runs every 15 minutes:
+
+```bash
+*/15 * * * * php /path/to/pv/job.php
+```
+
+It acts on two rules, both anchored at `JOB_TRIGGER_TIME` (12:15 by default,
+in `PV_TIMEZONE`):
+
+1. **Beginning of the month** - a report on the month that just ended: total
+   production, earnings, change against the previous month, change against the
+   same month a year earlier, and the best and weakest day.
+2. **Every day** - if the plant has produced less than `PV_MIN_MIDDAY_WH` by
+   the trigger time, an alert. If no fresh readings exist at all, the logger is
+   reported as the fault instead, because with a stalled upload there is no way
+   to tell whether the panels are working.
+
+Everything else is a no-op, so 94 of the 96 daily runs only check the clock.
+The frequent cadence buys resilience, not freshness: what has already been sent
+is recorded in `job_runs` rather than inferred from the current time, so a run
+missed at 12:15 still delivers later, and a missed 1st still delivers the
+monthly report within `JOB_MONTHLY_CATCHUP_DAYS`.
+
+Delivery is tracked per user, so an unreachable recipient is retried on the
+next run without re-sending to everyone who already received it.
+
+"Weakest day" ignores days with no production: an outage day is always the
+worst and would otherwise drown out the figure in exactly the months where it
+matters. Those are counted separately as *Tage ohne Ertrag*.
+
+## WhatsApp Setup
+
+You need a Meta Business account and a phone number that is **not** already
+registered to consumer WhatsApp.
+
+1. Create an app at [developers.facebook.com](https://developers.facebook.com/)
+   and add the **WhatsApp** product.
+2. Register the sender number and complete business verification.
+3. Create a **utility** template with a single body placeholder, e.g.
+   `PV Anlage: {{1}}`, and wait for approval. Put its name in
+   `META_TEMPLATE_NAME`.
+4. Create a **System User** and generate a permanent token - the default token
+   from API Setup expires after 24 hours and would silently break the job.
+5. Point Meta's webhook at `https://example.com/pv/webhook` and subscribe to
+   the `messages` field.
+
+Meta authenticates itself two different ways, and both are configured here:
+
+- **Registration (GET)** sends `hub.mode`, `hub.verify_token` and
+  `hub.challenge` as query parameters. `META_VERIFY_TOKEN` is any string you
+  choose; it is compared and the challenge echoed back. One-time only.
+- **Every real event (POST)** is signed with your app secret and delivered in
+  the `X-Hub-Signature-256` header as `sha256=<hmac>` over the raw body.
+  `META_APP_SECRET` is checked on every request in `Router`.
+
+## Configuration
+
+All settings live in `.env` (see `.env.example`), read with PHP's built-in
+`parse_ini_file()` - no library required. Real environment variables override
+the file.
+
+`.env` holds the database password, the Meta token and the app secret. The
+bundled `.htaccess` denies it on Apache; on nginx add
+`location ~ /\.env { deny all; }`, or keep it above the document root and point
+`PV_ENV_PATH` at it. The `data/` directory should not be browsable either.
+
+### Money figures
+
+`PV_EUR_PER_KWH` is applied to gross production. The logger records what the
+panels generated and cannot distinguish self-consumed kWh (which save the
+retail price) from exported kWh (which earn the feed-in tariff) - these usually
+differ by a factor of two or more. A single blended rate is a reasonable
+approximation, but treat the result as indicative rather than accounting.
+`PV_CURRENCY` sets the symbol.
+
+## API
+
+The dashboard talks to `/api`, which requires a session. Response shapes are
+unchanged from the previous standalone `api.php`:
+
+- `/api?view=config` - inverter count and names
+- `/api?view=stats` - today, month and year totals
+- `/api?view=hour&date=DD.MM.YY` - hourly power for one day
+- `/api?view=day&days=N` - last N days
+- `/api?view=week&offset=N` - week view (0 = current)
+- `/api?view=month&month=MM&year=YY` - one month
+- `/api?view=year&year=YY` - twelve monthly totals
+- `/api?view=years` - multi-year comparison
+
+Values are returned per inverter as `wr0`, `wr1`, ... plus a `total`.
 
 ## Installation
 
-1. Ensure PHP 7.4+ is installed
-2. Place all files in your web server directory
-3. Ensure the `data/` folder is writable by your FTP client
-4. Access via web browser
+1. PHP 8.0+ with `pdo_mysql`, and Apache with `mod_rewrite` (the `.htaccess`
+   needs `AllowOverride All`). On nginx, route all requests to `System.php` and
+   deny `/app`, `/views`, `/data` and `.env` yourself.
+2. Upload the files and point the logger's FTP upload at `data/`.
+3. `cp .env.example .env` and fill it in.
+4. `php setup.php init`, then add your first user.
+5. Add the cron entry for `job.php` and register the webhook with Meta.
 
-## Usage
-
-### Starting the Development Server
-
-```bash
-php -S localhost:8000
-```
-
-Then open your browser to: `http://localhost:8000`
-
-### Production Deployment
-
-Upload to your web server and configure your FTP client to upload data files to the `data/` directory.
-
-### API Endpoints
-
-The application provides the following JSON API endpoints:
-
-- `api.php?view=config` - Inverter configuration (count and names)
-- `api.php?view=stats` - Current statistics (today, month, year totals)
-- `api.php?view=hour&date=DD.MM.YY` - Hourly data for specific date
-- `api.php?view=day&days=N` - Last N days
-- `api.php?view=week&offset=N` - Week view (0=current, 1=last week, etc.)
-- `api.php?view=month&month=MM&year=YY` - Specific month
-- `api.php?view=year&year=YY` - Yearly monthly breakdown
-- `api.php?view=years` - Multi-year comparison
-
-All data endpoints return inverter-specific values as `wr0`, `wr1`, `wr2`, etc. (dynamically based on inverter count).
+For local development, `php -S localhost:8000 System.php` uses the front
+controller as the router, so the same URLs work without Apache.
 
 ## Technology Stack
 
-- **Backend**: PHP (server-side only)
+- **Backend**: PHP 8.0+, front controller, PDO/MySQL
 - **Frontend**: HTML5, CSS3, JavaScript (ES6)
 - **Charts**: Chart.js v4.4.0 (loaded via CDN)
-- **Data Format**: CSV files
+- **Data**: CSV/JS files from the logger; MySQL for accounts and job state
+- **Messaging**: WhatsApp Cloud API (no SDK - plain HTTPS)
 
 ## Color Scheme
 
@@ -140,8 +257,16 @@ All data endpoints return inverter-specific values as `wr0`, `wr1`, `wr2`, etc. 
 **Issue**: Charts not loading
 - **Solution**: Check browser console for errors and verify API endpoints return valid JSON
 
-**Issue**: PHP warnings about str_getcsv
-- **Solution**: Ensure PHP 7.4+ is being used
+**Issue**: Portal links are rejected as expired straight away
+- **Solution**: The database and PHP disagree about the clock. `Db` sets the
+  session timezone on connect, so check `PV_TIMEZONE` is a valid identifier.
+
+**Issue**: Every URL 404s, or the dashboard loads but `/api` does not
+- **Solution**: `mod_rewrite` is off or `AllowOverride` forbids the `.htaccess`.
+
+**Issue**: The bot never answers
+- **Solution**: Confirm the number is registered (`php setup.php list`) and
+  that `META_APP_SECRET` matches the app - a signature mismatch returns 403.
 
 ## License
 
