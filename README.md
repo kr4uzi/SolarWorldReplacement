@@ -74,7 +74,15 @@ php setup.php init                        # create the schema
 php setup.php "Markus" +4915112345678     # add a user
 php setup.php list
 php setup.php remove +4915112345678
+php setup.php check                       # verify the whole deployment
 ```
+
+`check` is the fastest way to find out what is still missing. It reports on the
+configuration file, the database and schema, the logger's files, the portal URL
+and every Meta credential, and exits non-zero if anything is broken - so it also
+works as a post-deploy smoke test. Secrets are shown only as a length and a
+short fingerprint, which is enough to compare the verify token against what you
+entered at Meta without printing it.
 
 `setup.php` refuses to run over the web, and `.htaccess` denies it as well.
 

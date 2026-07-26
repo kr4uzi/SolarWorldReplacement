@@ -16,9 +16,18 @@ final class Data
 
     public static function dir(): string
     {
-        $dir = (string)Env::get('PV_DATA_DIR', dirname(__DIR__) . '/data');
+        $dir = rtrim((string)Env::get('PV_DATA_DIR', 'data'), '/');
 
-        return rtrim($dir, '/') . '/';
+        // Resolve relative paths against the project root rather than the
+        // current working directory. Cron runs job.php from somewhere else
+        // entirely, and a path that quietly points at nothing would look
+        // exactly like a plant producing nothing.
+        $isAbsolute = str_starts_with($dir, '/') || preg_match('#^[A-Za-z]:[\\\\/]#', $dir) === 1;
+        if (!$isAbsolute) {
+            $dir = dirname(__DIR__) . '/' . ltrim($dir, './');
+        }
+
+        return $dir . '/';
     }
 
     /** Parse the logger's 'dd.mm.yy'. Returns 0 when unparsable. */

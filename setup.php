@@ -9,6 +9,7 @@ declare(strict_types=1);
  *   php setup.php add "Markus" +49151...    same thing, explicit
  *   php setup.php list                      show all accounts
  *   php setup.php remove +49151...          delete an account and its tokens
+ *   php setup.php check                     verify the whole deployment
  *
  * A user record is the only thing that grants access: the same row decides
  * who the bot answers and who can hold a portal session. There is no
@@ -26,6 +27,7 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/app/bootstrap.php';
 
 use PV\Auth;
+use PV\Data;
 use PV\Db;
 
 /** @return never */
@@ -44,17 +46,148 @@ function usage(): void
       php setup.php add <name> <phone>         add a user
       php setup.php list                       list users
       php setup.php remove <phone>             delete a user
+      php setup.php check                      verify the whole deployment
 
     TXT;
+}
+
+/**
+ * Walk the whole deployment and report what is and is not ready.
+ * Returns a shell exit code: 0 when nothing is broken.
+ */
+function runCheck(): int
+{
+    $problems = 0;
+    $warnings = 0;
+
+    $ok   = static function (string $label, string $detail = ''): void {
+        printf("  [ ok ] %-26s %s\n", $label, $detail);
+    };
+    $bad  = static function (string $label, string $detail) use (&$problems): void {
+        $problems++;
+        printf("  [FAIL] %-26s %s\n", $label, $detail);
+    };
+    $warn = static function (string $label, string $detail) use (&$warnings): void {
+        $warnings++;
+        printf("  [warn] %-26s %s\n", $label, $detail);
+    };
+
+    echo "\nConfiguration\n";
+    $envPath = PV\Env::path();
+    file_exists($envPath)
+        ? $ok('.env', $envPath)
+        : $bad('.env', "not found at {$envPath} - copy .env.example there");
+
+    $tz = (string)PV\Env::get('PV_TIMEZONE', 'Europe/Berlin');
+    in_array($tz, DateTimeZone::listIdentifiers(), true)
+        ? $ok('timezone', $tz . ' (now ' . date('H:i') . ')')
+        : $bad('timezone', "'{$tz}' is not a valid identifier");
+
+    echo "\nDatabase\n";
+    try {
+        Db::conn();
+        $ok('connection', (string)PV\Env::get('DB_NAME', '(via DB_DSN)'));
+
+        if (Db::isInstalled()) {
+            $users = Auth::activeUsers();
+            $ok('schema', 'installed');
+            $users === []
+                ? $warn('users', 'none yet - add one: php setup.php "Name" +49...')
+                : $ok('users', count($users) . ' registered');
+        } else {
+            $bad('schema', "missing - run: php setup.php init");
+        }
+    } catch (Throwable $e) {
+        $bad('connection', $e->getMessage());
+    }
+
+    echo "\nLogger data\n";
+    $dir = Data::dir();
+    if (!is_dir($dir)) {
+        $bad('data directory', "{$dir} does not exist");
+    } else {
+        $ok('data directory', $dir);
+
+        is_readable($dir . 'days.csv')
+            ? $ok('days.csv', count(Data::days()) . ' days on record')
+            : $bad('days.csv', 'missing - the dashboard and reports need it');
+
+        $today = Data::today();
+        if ($today['ts'] === 0) {
+            $warn('min_day.js', 'no live readings - fine at night, otherwise check the upload');
+        } else {
+            $age = (time() - $today['ts']) / 60;
+            $age > (float)PV\Env::get('PV_MAX_DATA_AGE_MINUTES', 60)
+                ? $warn('min_day.js', sprintf('last reading %s (%.0f min old)', date('H:i', $today['ts']), $age))
+                : $ok('min_day.js', 'last reading ' . date('H:i', $today['ts']));
+        }
+
+        $config = Data::inverterConfig();
+        $names  = implode(', ', $config['names']);
+        str_starts_with($names, 'WR 1')
+            ? $warn('inverters', "{$config['count']} found, names not resolved ({$names}) - check base_vars.js")
+            : $ok('inverters', "{$config['count']}: {$names}");
+    }
+
+    echo "\nPortal\n";
+    $portal = (string)PV\Env::get('PORTAL_URL', '');
+    if ($portal === '') {
+        $bad('PORTAL_URL', 'not set - login links cannot be built');
+    } elseif (!str_starts_with($portal, 'https://')) {
+        $warn('PORTAL_URL', "{$portal} - should be https, the login token travels in the URL");
+    } else {
+        $ok('PORTAL_URL', $portal);
+        $ok('webhook URL', rtrim($portal, '/') . '/webhook');
+    }
+
+    echo "\nWhatsApp\n";
+    foreach ([
+        'META_TOKEN'           => 'App > WhatsApp > API Setup (use a System User token)',
+        'META_PHONE_NUMBER_ID' => 'App > WhatsApp > API Setup',
+        'META_VERIFY_TOKEN'    => 'any string you choose; must match Meta webhook setup',
+        'META_APP_SECRET'      => 'App > Settings > Basic - signs every incoming event',
+    ] as $key => $where) {
+        $value = (string)PV\Env::get($key, '');
+        $value === ''
+            ? $bad($key, "not set - {$where}")
+            : $ok($key, sprintf('set (%d chars, fp %s)', strlen($value), substr(hash('sha256', $value), 0, 8)));
+    }
+    $ok('template', (string)PV\Env::get('META_TEMPLATE_NAME', 'pv_update')
+        . ' / ' . (string)PV\Env::get('META_TEMPLATE_LANG', 'de'));
+
+    $rate = (float)PV\Env::get('PV_EUR_PER_KWH', 0);
+    $rate > 0
+        ? $ok('tariff', $rate . ' per kWh')
+        : $warn('tariff', 'PV_EUR_PER_KWH not set - money figures will be omitted');
+
+    printf(
+        "\n%s  (%d problem%s, %d warning%s)\n\n",
+        $problems === 0 ? 'Ready.' : 'Not ready yet.',
+        $problems, $problems === 1 ? '' : 's',
+        $warnings, $warnings === 1 ? '' : 's'
+    );
+
+    return $problems === 0 ? 0 : 1;
 }
 
 $argv    = $_SERVER['argv'];
 $command = $argv[1] ?? '';
 
+// 'check' has to run before anything that could fail hard, since diagnosing a
+// broken configuration is precisely its job.
+if ($command === 'check') {
+    exit(runCheck());
+}
+
+if (in_array($command, ['', '-h', '--help', 'help'], true)) {
+    usage();
+    exit(0);
+}
+
 try {
     Db::conn();
 } catch (Throwable $e) {
-    fail("Cannot connect to the database: {$e->getMessage()}\nCheck DB_* in .env.");
+    fail("Cannot connect to the database: {$e->getMessage()}\nCheck DB_* in .env.\nRun 'php setup.php check' for a full report.");
 }
 
 switch ($command) {
