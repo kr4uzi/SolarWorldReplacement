@@ -163,7 +163,10 @@ buttons rather than keywords to remember.
    ```
 
 Telegram identifies people by numeric chat id, which nobody can look up or
-type, so accounts are created empty and activated by the invite link. Opening
+type, so accounts are created empty and activated by the invite link. Note that
+**a bare `/start` does not activate anything** - the link sends
+`/start <code>`, and the code is the whole point. Typing `/start` by hand from
+an unregistered chat gets a reply saying so, along with that chat's id. Opening
 it starts a chat, binds that account, and the code stops working - a forwarded
 link cannot claim it twice. Until then `check` lists the account as awaiting
 activation.

@@ -21,9 +21,11 @@ use PV\Transport\Telegram;
  * Authentication is the secret token Telegram echoes back on every delivery,
  * checked in Router before anything here runs.
  *
- * An update from a chat that belongs to no account is answered with nothing at
- * all: the users table is the whitelist, and staying silent avoids confirming
- * the bot exists to anyone who finds it.
+ * The users table is the whitelist, so a chat that belongs to no account gets
+ * no data. It does get an answer to /start, though: that is the moment someone
+ * is trying to get set up, and silence there is indistinguishable from a broken
+ * webhook. There is nothing to conceal either - a Telegram bot is public by its
+ * @username, unlike a phone number.
  */
 final class TelegramWebhook implements Handler
 {
@@ -78,7 +80,19 @@ final class TelegramWebhook implements Handler
 
         $user = Auth::userByAddress($chatId);
         if ($user === null) {
-            $this->log("ignored message from unregistered chat {$chatId}");
+            $this->log("message from unregistered chat {$chatId}: " . ($text === '' ? '(no text)' : $text));
+
+            // Answer a bare /start rather than saying nothing. Silence here is
+            // indistinguishable from a broken webhook, and this is exactly the
+            // moment someone is trying to get set up. A Telegram bot is public
+            // by its @username anyway, so there is nothing to conceal - unlike
+            // a phone number, where staying quiet is worth something.
+            if (str_starts_with($text, '/start')) {
+                Telegram::call('sendMessage', [
+                    'chat_id' => $chatId,
+                    'text'    => Messages::notInvited($chatId),
+                ]);
+            }
             return;
         }
 

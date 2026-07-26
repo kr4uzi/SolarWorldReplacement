@@ -153,6 +153,25 @@ final class Messages
     }
 
     /**
+     * Shown when an unknown chat says hello.
+     *
+     * Includes the chat id on purpose: it is what the operator needs to link
+     * the account by hand if the invite link went astray, and it is not
+     * sensitive - Telegram shows it to the chat's own participant anyway.
+     */
+    public static function notInvited(string $chatId): string
+    {
+        return implode("\n", [
+            'Dieser Chat ist noch nicht freigeschaltet.',
+            '',
+            'Öffne bitte deinen persönlichen Einladungslink - ein einfaches',
+            '"/start" reicht nicht, der Link enthält einen Code.',
+            '',
+            'Deine Chat-ID: ' . $chatId,
+        ]);
+    }
+
+    /**
      * Sent when an account is created.
      *
      * Deliberately short and free of line breaks: a new user has never written
