@@ -213,6 +213,24 @@ function runTelegramStatus(): int
     $expected = PV\Router::url('telegram-webhook');
     $current  = (string)($info['url'] ?? '');
 
+    // Which bot the token actually belongs to. Registering the webhook with
+    // one bot's token and then chatting with a different bot looks exactly
+    // like a dead webhook, and nothing else here would reveal it.
+    $me = PV\Transport\Telegram::call('getMe', []);
+    if ($me['ok']) {
+        $bot = json_decode($me['body'], true)['result'] ?? [];
+        printf("  %-22s @%s (%s)\n", 'token belongs to',
+            (string)($bot['username'] ?? '?'), (string)($bot['first_name'] ?? ''));
+
+        $configured = ltrim(trim((string)PV\Env::get('TELEGRAM_BOT_USERNAME', '')), '@');
+        if ($configured !== '' && strcasecmp($configured, (string)($bot['username'] ?? '')) !== 0) {
+            printf("  %-22s @%s - invite links point at a DIFFERENT bot\n",
+                'TELEGRAM_BOT_USERNAME', $configured);
+        }
+    } else {
+        printf("  %-22s token rejected by Telegram (HTTP %d)\n", 'token belongs to', $me['status']);
+    }
+
     printf("  %-22s %s\n", 'expected URL', $expected);
     printf("  %-22s %s\n", 'registered URL', $current === '' ? '(none)' : $current);
     printf("  %-22s %s\n", 'pending updates', (string)($info['pending_update_count'] ?? 0));

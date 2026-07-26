@@ -182,10 +182,15 @@ When it looks dead, ask Telegram rather than guessing:
 php setup.php telegram-status
 ```
 
-It prints the URL Telegram is delivering to, how many updates are queued, and
-why the last delivery failed - which separates "never registered" from
+It prints which bot the token belongs to, the URL Telegram is delivering to,
+how many updates are queued, and why the last delivery failed - which separates "never registered" from
 "registered at a stale URL" from "registered but rejected", and names the
 likely cause for each HTTP status.
+
+A bot has exactly one webhook - `setWebhook` replaces whatever was there, and
+there is no list. If the token belongs to a different bot than
+`TELEGRAM_BOT_USERNAME`, the invite links point somewhere the webhook is not,
+which `telegram-status` calls out.
 
 ### BirdyChat
 
