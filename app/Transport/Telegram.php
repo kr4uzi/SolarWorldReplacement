@@ -77,7 +77,14 @@ final class Telegram implements Transport
 
     public function sendReply(string $address, string $text): array
     {
-        return self::call('sendMessage', ['chat_id' => $address, 'text' => $text]);
+        return self::call('sendMessage', [
+            'chat_id' => $address,
+            'text'    => $text,
+            // Telegram fetches links to build a preview card. A login link is
+            // single-use, so that fetch would spend it before its owner ever
+            // tapped it - and the message looks tidier without the card anyway.
+            'link_preview_options' => ['is_disabled' => true],
+        ]);
     }
 
     public function sendNotification(string $address, string $text): array

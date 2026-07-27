@@ -46,8 +46,8 @@ $reason ??= 'Für den Zugang brauchst du einen Anmeldelink.';
         <h1>Kein Zugriff</h1>
         <p><?= htmlspecialchars($reason, ENT_QUOTES, 'UTF-8') ?></p>
         <p class="hint">
-            Schreib der PV-Anlage auf WhatsApp <code>Portal</code>,
-            um einen neuen Link zu erhalten.
+            Schreib der PV-Anlage <code>Portal</code>, um einen neuen Link
+            zu erhalten.
         </p>
     </div>
 </body>

@@ -205,6 +205,28 @@ final class Auth
     }
 
     /**
+     * Look at a token without spending it.
+     *
+     * Needed because anything may fetch a link that arrives in a chat: Telegram
+     * builds a preview card, link scanners and antivirus proxies follow URLs.
+     * If merely fetching the page consumed the token, the link would be dead by
+     * the time its owner tapped it - so the page checks with this, and only the
+     * confirming POST redeems.
+     */
+    public static function peekToken(string $token): ?array
+    {
+        $statement = Db::conn()->prepare('SELECT * FROM login_tokens WHERE token_hash = ? LIMIT 1');
+        $statement->execute([hash('sha256', trim($token))]);
+        $row = $statement->fetch();
+
+        if ($row === false || strtotime((string)$row['expires_at']) < time()) {
+            return null;
+        }
+
+        return self::userById((int)$row['user_id']);
+    }
+
+    /**
      * Redeem a token. Returns the user on success, null otherwise.
      * The row is deleted either way, so a token never works twice.
      */
