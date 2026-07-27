@@ -2,7 +2,7 @@
 /**
  * Confirmation step of the login link.
  *
- * $user, $token and $action are supplied by Controller\Login. The token is
+ * $user, $token, $next and $action are supplied by Controller\Login. The token is
  * spent by this form's POST, never by loading this page - see that controller
  * for why.
  */
@@ -59,7 +59,10 @@
 
         <form method="post" action="<?= htmlspecialchars($action, ENT_QUOTES, 'UTF-8') ?>">
             <input type="hidden" name="t" value="<?= htmlspecialchars($token, ENT_QUOTES, 'UTF-8') ?>">
-            <button type="submit">Zum Dashboard</button>
+            <?php if ($next !== ''): ?>
+                <input type="hidden" name="n" value="<?= htmlspecialchars($next, ENT_QUOTES, 'UTF-8') ?>">
+            <?php endif; ?>
+            <button type="submit"><?= $next === 'settings' ? 'Zu den Einstellungen' : 'Zum Dashboard' ?></button>
         </form>
 
         <p class="hint">

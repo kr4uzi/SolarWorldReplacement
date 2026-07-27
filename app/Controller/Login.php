@@ -27,6 +27,11 @@ final class Login implements Handler
     {
         $token = (string)($_POST['t'] ?? $_GET['t'] ?? '');
 
+        // Where to land afterwards. The bot's settings button sends people
+        // here on their way to the settings page; Router::destination()
+        // decides what is an acceptable destination.
+        $next = Router::destination((string)($_POST['n'] ?? $_GET['n'] ?? ''));
+
         if (Router::isDiagnostic()) {
             $this->report($token);
             return;
@@ -34,7 +39,7 @@ final class Login implements Handler
 
         if ($token === '') {
             if (Auth::user() !== null) {
-                header('Location: ' . Router::path(), true, 302);
+                header('Location: ' . $next, true, 302);
                 return;
             }
             $this->deny('Dieser Link ist unvollständig - bitte fordere einen neuen an.');
@@ -42,7 +47,7 @@ final class Login implements Handler
         }
 
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-            $this->redeem($token);
+            $this->redeem($token, $next);
             return;
         }
 
@@ -63,7 +68,7 @@ final class Login implements Handler
                     Auth::login($user);
                 }
             }
-            header('Location: ' . Router::path(), true, 302);
+            header('Location: ' . $next, true, 302);
             return;
         }
 
@@ -72,10 +77,10 @@ final class Login implements Handler
             return;
         }
 
-        $this->confirm($user, $token);
+        $this->confirm($user, $token, (string)($_GET['n'] ?? ''));
     }
 
-    private function redeem(string $token): void
+    private function redeem(string $token, string $next): void
     {
         $user = Auth::consumeToken($token);
         if ($user === null) {
@@ -84,11 +89,11 @@ final class Login implements Handler
         }
 
         Auth::login($user);
-        header('Location: ' . Router::path(), true, 302);
+        header('Location: ' . $next, true, 302);
     }
 
     /** The one tap that actually spends the token. */
-    private function confirm(array $user, string $token): void
+    private function confirm(array $user, string $token, string $next): void
     {
         header('Content-Type: text/html; charset=utf-8');
         // Nothing here should be cached or indexed - it holds a live token.

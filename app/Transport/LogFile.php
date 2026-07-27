@@ -52,7 +52,7 @@ final class LogFile implements Transport
 
     public function sendMenu(string $address): array
     {
-        return $this->write('menu', $address, "Menü: Portal · Woche · Monatsertrag · Jahresertrag");
+        return $this->write('menu', $address, "Menü: Portal · Woche · Monatsertrag · Jahresertrag · Einstellungen");
     }
 
     /**

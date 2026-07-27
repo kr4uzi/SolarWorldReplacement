@@ -201,6 +201,36 @@ final class Auth
         $statement->execute([(int)$zero, (int)$daily, (int)$monthly, $time, $userId]);
     }
 
+    /** The switches that can be flipped one at a time, and their columns. */
+    public const NOTIFICATIONS = [
+        'zero'    => 'notify_zero',
+        'daily'   => 'notify_daily',
+        'monthly' => 'notify_monthly',
+    ];
+
+    /**
+     * Flip one switch, leaving the others and the time alone.
+     *
+     * Written as a single UPDATE rather than read-modify-write so two taps in
+     * quick succession cannot both act on the same stale value and lose one.
+     *
+     * @return array|null the user as it now stands, or null for an unknown switch
+     */
+    public static function toggleNotification(int $userId, string $which): ?array
+    {
+        $column = self::NOTIFICATIONS[$which] ?? null;
+        if ($column === null) {
+            return null;
+        }
+
+        // The column name is interpolated because a placeholder cannot name
+        // one - but it comes from the constant above, never from the request.
+        $statement = Db::conn()->prepare("UPDATE users SET {$column} = NOT {$column} WHERE id = ?");
+        $statement->execute([$userId]);
+
+        return self::userById($userId);
+    }
+
     /** Accepts either a phone number or an address. */
     public static function removeUser(string $contact): bool
     {

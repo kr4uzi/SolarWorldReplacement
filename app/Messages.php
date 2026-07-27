@@ -103,6 +103,7 @@ final class Messages
             '  Woche         – Ertrag der letzten 7 Tage',
             '  Monatsertrag  – Ertrag im laufenden Monat',
             '  Jahresertrag  – Ertrag im laufenden Jahr',
+            '  Einstellungen – Welche Meldungen du bekommst, und wann',
             '',
             'Antworte einfach mit dem Stichwort.',
         ]);
@@ -206,6 +207,65 @@ final class Messages
     public static function chartEmpty(): string
     {
         return 'Keine Daten';
+    }
+
+    // --- Notification settings ----------------------------------------------
+
+    public static function onOff(bool $on): string
+    {
+        return $on ? 'An' : 'Aus';
+    }
+
+    /** Labels for the switches, in the order they are shown. */
+    public static function notificationLabels(): array
+    {
+        return [
+            'zero'    => 'Störungsmeldung',
+            'daily'   => 'Täglicher Ertrag',
+            'monthly' => 'Monatsbericht',
+        ];
+    }
+
+    /**
+     * The settings as they stand.
+     *
+     * Written out in full rather than left to the buttons: the buttons show
+     * the same thing, but a chat keeps its history and this way scrolling back
+     * still tells you what was switched and when.
+     */
+    public static function notificationSettings(array $settings): string
+    {
+        $lines = ['🔔 Benachrichtigungen', ''];
+
+        $width = 0;
+        foreach (self::notificationLabels() as $label) {
+            $width = max($width, mb_strlen($label));
+        }
+
+        foreach (self::notificationLabels() as $key => $label) {
+            $padding = str_repeat(' ', $width - mb_strlen($label) + 2);
+            $lines[] = '   ' . $label . $padding . self::onOff((bool)$settings[$key]);
+        }
+
+        $lines[] = '';
+        $lines[] = '   Uhrzeit' . str_repeat(' ', max(1, $width - 7 + 2)) . $settings['time'] . ' Uhr';
+        $lines[] = '';
+        $lines[] = 'Tippe eine Option an, um sie umzuschalten.';
+
+        return implode("\n", $lines);
+    }
+
+    /** The switch that was just flipped, for the button's own confirmation. */
+    public static function notificationToggled(string $which, bool $on): string
+    {
+        return (self::notificationLabels()[$which] ?? $which) . ': ' . self::onOff($on);
+    }
+
+    public static function notificationTimeLink(string $url, int $ttlMinutes): string
+    {
+        return "🕒 Uhrzeit ändern:\n{$url}\n\n"
+             . "Der Link öffnet die Einstellungen im Portal, gilt {$ttlMinutes} Minuten "
+             . 'und kann nur einmal verwendet werden.';
     }
 
     public static function portalLink(string $url, int $ttlMinutes): string

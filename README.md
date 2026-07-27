@@ -118,6 +118,13 @@ Logging in works like this:
 5. Confirming starts a session and immediately redirects, which strips the
    token from the address bar, the browser history and any `Referer` header.
 
+A link may name where it should land, as `&n=<route>` - the bot's "Uhrzeit"
+button uses it to open the settings page directly rather than the dashboard
+with an instruction to go looking. The name is matched against the route table
+and only session routes are accepted; anything else falls back to the dashboard,
+so this cannot become an open redirect out of a link that has just established a
+session. The destination survives the confirmation step as a hidden field.
+
 Opening a link while already signed in skips the confirmation entirely and goes
 straight to the dashboard - the step exists to stop prefetchers, and a
 prefetcher never carries the session cookie. The token is spent anyway so it
@@ -296,11 +303,13 @@ Message the business number and the German menu appears:
 | **7 Tage** | The last week, one bar per day |
 | **Monatsertrag** | Current month, in kWh and money, one bar per day |
 | **Jahresertrag** | Current year, in kWh and money, one bar per month |
+| **Benachrichtigungen** | Which messages this account gets, and when |
 
-Typed words work too - `portal`, `woche`, `monat`, `jahr` (and `week`/`month`/
-`year`), with or without a leading slash. Anything unrecognised brings the menu
-back. Numbers that are not registered are ignored silently rather than told they
-lack access, which avoids confirming the number is live.
+Typed words work too - `portal`, `woche`, `monat`, `jahr`, `einstellungen`
+(and `week`/`month`/`year`/`settings`), with or without a leading slash.
+Anything unrecognised brings the menu back. Numbers that are not registered are
+ignored silently rather than told they lack access, which avoids confirming the
+number is live.
 
 ### Charts
 
@@ -334,7 +343,8 @@ approved template.
 
 ## Notification settings
 
-Each user chooses what they want and when, at `/settings` in the portal:
+Each user chooses what they want and when - from the bot's **Benachrichtigungen**
+menu, or at `/settings` in the portal:
 
 | Setting | Default | What it sends |
 |---|---|---|
@@ -342,6 +352,20 @@ Each user chooses what they want and when, at `/settings` in the portal:
 | Täglicher Ertrag | off | The day's figures so far |
 | Monatsbericht | on | A report on the month that just ended, at the start of a month |
 | Uhrzeit | `JOB_TRIGGER_TIME` | When those go out, using the browser's own time picker |
+
+In the chat the three switches are buttons showing their own state, and tapping
+one rewrites the card in place rather than sending another copy - otherwise
+flipping three switches leaves four near-identical messages behind, three of
+them showing settings that are no longer true. Each tap is a single `UPDATE` of
+one column, so two taps in quick succession cannot both act on the same stale
+value and lose one.
+
+The time is the exception: it opens the portal instead, because picking an hour
+out of an inline keyboard means a wall of buttons where the browser already has
+a time picker built in. That button sends a normal one-time login link carrying
+`&n=settings`, which is a destination rather than a URL - `Router::destination()`
+matches it against the route table and accepts only session routes, so a link
+that has just established a session cannot be turned into an open redirect.
 
 The defaults match how the job behaved before the settings existed, so
 upgrading changes nothing until somebody opens the page. Because the time is

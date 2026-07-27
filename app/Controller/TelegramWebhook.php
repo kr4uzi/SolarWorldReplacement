@@ -111,23 +111,70 @@ final class TelegramWebhook implements Handler
 
     private function handleCallback(array $callback): void
     {
-        $chatId = (string)($callback['message']['chat']['id'] ?? $callback['from']['id'] ?? '');
-        $data   = trim((string)($callback['data'] ?? ''));
+        $chatId    = (string)($callback['message']['chat']['id'] ?? $callback['from']['id'] ?? '');
+        $data      = trim((string)($callback['data'] ?? ''));
+        $callbackId = (string)($callback['id'] ?? '');
 
-        if (isset($callback['id'])) {
-            Telegram::acknowledgeCallback((string)$callback['id']);
-        }
         if ($chatId === '') {
+            if ($callbackId !== '') {
+                Telegram::acknowledgeCallback($callbackId);
+            }
             return;
         }
 
         $user = Auth::userByAddress($chatId);
         if ($user === null) {
             $this->log("ignored callback from unregistered chat {$chatId}");
+            if ($callbackId !== '') {
+                Telegram::acknowledgeCallback($callbackId);
+            }
             return;
         }
 
+        // A switch inside the settings card rewrites that card in place, so it
+        // is handled here rather than in act(): it needs the id of the message
+        // the button belongs to, which nothing else does.
+        if (str_starts_with($data, Telegram::TOGGLE_PREFIX) && $data !== Telegram::NOTIFY_TIME) {
+            $this->toggleSetting(
+                substr($data, strlen(Telegram::TOGGLE_PREFIX)),
+                $chatId,
+                $user,
+                $callbackId,
+                (int)($callback['message']['message_id'] ?? 0)
+            );
+            return;
+        }
+
+        if ($callbackId !== '') {
+            Telegram::acknowledgeCallback($callbackId);
+        }
+
         $this->act($data === '' ? 'menu' : $data, $chatId, $user);
+    }
+
+    /** Flip one notification switch and rewrite the card it lives in. */
+    private function toggleSetting(string $which, string $chatId, array $user, string $callbackId, int $messageId): void
+    {
+        $updated = Auth::toggleNotification((int)$user['id'], $which);
+        if ($updated === null) {
+            $this->log("unknown notification switch '{$which}' from chat {$chatId}");
+            if ($callbackId !== '') {
+                Telegram::acknowledgeCallback($callbackId);
+            }
+            return;
+        }
+
+        $settings = Auth::settings($updated);
+        $this->log("{$chatId} -> notify:{$which} = " . ($settings[$which] ? 'on' : 'off'));
+
+        if ($callbackId !== '') {
+            Telegram::acknowledgeCallback(
+                $callbackId,
+                Messages::notificationToggled($which, (bool)$settings[$which])
+            );
+        }
+
+        Telegram::sendSettings($chatId, $settings, $messageId > 0 ? $messageId : null);
     }
 
     /** Bind this chat to the account the invite code belongs to. */
@@ -163,6 +210,8 @@ final class TelegramWebhook implements Handler
         // falls back to text wherever an image cannot be drawn or sent.
         match ($action) {
             Telegram::MENU_PORTAL => $this->sendPortalLink($user, $chatId),
+            Telegram::MENU_NOTIFY => Telegram::sendSettings($chatId, Auth::settings($user)),
+            Telegram::NOTIFY_TIME => $this->sendPortalLink($user, $chatId, 'settings'),
             Telegram::MENU_WEEK   => Messenger::image($chatId, Chart::lastDays(7), Messages::lastDays(7)),
             Telegram::MENU_MONTH  => Messenger::image(
                 $chatId,
@@ -188,6 +237,10 @@ final class TelegramWebhook implements Handler
             Telegram::MENU_WEEK   => ['woche', '7 tage', 'grafik', 'chart', 'week'],
             Telegram::MENU_MONTH  => ['monat', 'monatsertrag', 'month'],
             Telegram::MENU_YEAR   => ['jahr', 'jahresertrag', 'year'],
+            Telegram::MENU_NOTIFY => [
+                'benachrichtigungen', 'benachrichtigung', 'einstellungen',
+                'settings', 'notify', 'alarm',
+            ],
         ] as $action => $keywords) {
             if (in_array($text, $keywords, true)) {
                 return $action;
@@ -197,15 +250,23 @@ final class TelegramWebhook implements Handler
         return 'menu';
     }
 
-    private function sendPortalLink(array $user, string $chatId): void
+    /**
+     * A one-time login link.
+     *
+     * $route names where it should land - empty for the dashboard, 'settings'
+     * for the notification page, where the browser's own time picker is a far
+     * better way to choose an hour than a keyboard of 24 buttons would be.
+     */
+    private function sendPortalLink(array $user, string $chatId, string $route = ''): void
     {
         $token = Auth::issueToken((int)$user['id']);
         $ttl   = max(1, (int)Env::get('LOGIN_TOKEN_TTL_MINUTES', 15));
+        $url   = Router::url('login') . '?t=' . urlencode($token)
+               . ($route === '' ? '' : '&n=' . urlencode($route));
 
-        Messenger::reply($chatId, Messages::portalLink(
-            Router::url('login') . '?t=' . urlencode($token),
-            $ttl
-        ));
+        Messenger::reply($chatId, $route === 'settings'
+            ? Messages::notificationTimeLink($url, $ttl)
+            : Messages::portalLink($url, $ttl));
     }
 
     private function report(array $update): void

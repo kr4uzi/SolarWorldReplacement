@@ -89,6 +89,26 @@ final class Router
         return $route === '' ? ($base === '' ? '/' : $base . '/') : $base . '/' . ltrim($route, '/');
     }
 
+    /**
+     * Where a login link should land, given the route it asked for.
+     *
+     * A login link can name a destination, so the bot's "change the time"
+     * button opens the settings page directly rather than the dashboard with
+     * an instruction to go looking. The name is matched against the route
+     * table and anything else falls back to the dashboard: an open redirect
+     * out of a link that has just established a session would be worth real
+     * money to a phisher, and only session routes are worth arriving at.
+     */
+    public static function destination(string $route): string
+    {
+        $route = trim($route, '/');
+        $known = self::routes()[$route] ?? null;
+
+        return $known !== null && $known[1] === self::AUTH_SESSION
+            ? self::path($route)
+            : self::path();
+    }
+
     /** Raw request body, read once so the signature check and the controller agree. */
     public static function rawBody(): string
     {

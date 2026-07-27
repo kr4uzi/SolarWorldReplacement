@@ -25,6 +25,11 @@ final class Telegram implements Transport
     public const MENU_MONTH  = 'month';
     public const MENU_YEAR   = 'year';
     public const MENU_WEEK   = 'week';
+    public const MENU_NOTIFY = 'notify';
+
+    /** Callback data for the switches inside the settings card. */
+    public const TOGGLE_PREFIX = 'notify:';
+    public const NOTIFY_TIME   = 'notify:time';
 
     /** Telegram truncates a photo caption past this many characters. */
     private const CAPTION_LIMIT = 1024;
@@ -112,9 +117,59 @@ final class Telegram implements Transport
                         ['text' => '📅 Monatsertrag', 'callback_data' => self::MENU_MONTH],
                         ['text' => '📈 Jahresertrag', 'callback_data' => self::MENU_YEAR],
                     ],
+                    [['text' => '🔔 Benachrichtigungen', 'callback_data' => self::MENU_NOTIFY]],
                 ],
             ],
         ]);
+    }
+
+    /**
+     * The notification settings, as switches that can be tapped.
+     *
+     * Passing $editMessageId rewrites the card that is already in the chat
+     * instead of sending another one: flipping three switches would otherwise
+     * leave four near-identical messages behind, and the older ones would show
+     * settings that are no longer true.
+     */
+    public static function sendSettings(string $chatId, array $settings, ?int $editMessageId = null): array
+    {
+        $rows = [];
+        foreach (Messages::notificationLabels() as $key => $label) {
+            $on     = (bool)$settings[$key];
+            $rows[] = [[
+                'text'          => ($on ? '✅ ' : '⬜ ') . $label,
+                'callback_data' => self::TOGGLE_PREFIX . $key,
+            ]];
+        }
+
+        // The time is a portal link rather than a set of buttons: picking a
+        // time out of a keyboard means one row per hour, where the browser
+        // already has a time picker built in.
+        $rows[] = [['text' => '🕒 Uhrzeit: ' . $settings['time'], 'callback_data' => self::NOTIFY_TIME]];
+        $rows[] = [['text' => '⬅️ Menü', 'callback_data' => 'menu']];
+
+        $params = [
+            'chat_id'      => $chatId,
+            'text'         => Messages::notificationSettings($settings),
+            'reply_markup' => ['inline_keyboard' => $rows],
+        ];
+
+        if ($editMessageId === null) {
+            return self::call('sendMessage', $params);
+        }
+
+        $params['message_id'] = $editMessageId;
+        $result = self::call('editMessageText', $params);
+
+        // An edit can fail for reasons that are not the user's problem - the
+        // message is too old to edit, or was deleted. Send a fresh card then,
+        // rather than leaving the tap looking as though it did nothing.
+        if (!$result['ok']) {
+            unset($params['message_id']);
+            return self::call('sendMessage', $params);
+        }
+
+        return $result;
     }
 
     /**
@@ -159,9 +214,19 @@ final class Telegram implements Transport
         return $overlong ? $this->sendReply($address, $caption) : $result;
     }
 
-    /** Stops the button's spinner; Telegram expects this for every callback. */
-    public static function acknowledgeCallback(string $callbackId): void
+    /**
+     * Stops the button's spinner; Telegram expects this for every callback.
+     *
+     * With text it also shows a brief toast, which is what makes a switch feel
+     * like it did something even before the card below it is rewritten.
+     */
+    public static function acknowledgeCallback(string $callbackId, string $text = ''): void
     {
-        self::call('answerCallbackQuery', ['callback_query_id' => $callbackId]);
+        $params = ['callback_query_id' => $callbackId];
+        if ($text !== '') {
+            $params['text'] = $text;
+        }
+
+        self::call('answerCallbackQuery', $params);
     }
 }
