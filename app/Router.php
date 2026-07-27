@@ -32,6 +32,7 @@ final class Router
         return [
             ''        => [Controller\Dashboard::class, self::AUTH_SESSION],
             'api'     => [Controller\Api::class,       self::AUTH_SESSION],
+            'settings' => [Controller\Settings::class, self::AUTH_SESSION],
             'login'   => [Controller\Login::class,     self::AUTH_PUBLIC],
             'webhook'       => [Controller\Webhook::class,      self::AUTH_SIGNATURE],
             'birdy-webhook' => [Controller\BirdyWebhook::class, self::AUTH_BIRDY],

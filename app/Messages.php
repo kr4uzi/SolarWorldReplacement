@@ -124,6 +124,24 @@ final class Messages
         return implode("\n", $lines);
     }
 
+    /** Today so far - what the daily update reports. */
+    public static function today(): string
+    {
+        $today = Data::today();
+        $total = array_sum($today['wh']);
+
+        $lines = ['☀️ Heute, Stand ' . date('H:i') . ' Uhr', '   ' . self::energy($total)];
+        $lines = array_merge($lines, self::breakdown($today['wh']));
+
+        $pac = array_sum($today['pac']);
+        if ($pac > 0) {
+            $lines[] = '';
+            $lines[] = '   Aktuell: ' . self::number($pac / 1000, 2) . ' kW';
+        }
+
+        return implode("\n", $lines);
+    }
+
     public static function currentYear(): string
     {
         $sum   = Data::sumYear((int)date('Y'));

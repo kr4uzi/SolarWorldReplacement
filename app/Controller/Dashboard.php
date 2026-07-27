@@ -14,7 +14,8 @@ final class Dashboard implements Handler
 
         // Consumed by views/dashboard.php.
         $user   = Auth::user();
-        $apiUrl = Router::path('api');
+        $apiUrl      = Router::path('api');
+        $settingsUrl = Router::path('settings');
 
         require dirname(__DIR__, 2) . '/views/dashboard.php';
     }

@@ -91,6 +91,21 @@ final class Db
                  ADD UNIQUE KEY uniq_users_invite (invite_code)';
         }
 
+        // Per-user notification preferences. Defaults match the behaviour
+        // before they existed, so an upgrade changes nothing until someone
+        // opens the settings page.
+        foreach ([
+            'notify_zero'    => 'TINYINT(1) NOT NULL DEFAULT 1',
+            'notify_daily'   => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'notify_monthly' => 'TINYINT(1) NOT NULL DEFAULT 1',
+            // NULL means "use JOB_TRIGGER_TIME".
+            'notify_time'    => 'TIME NULL',
+        ] as $column => $definition) {
+            if (!self::hasColumn('users', $column)) {
+                $pending["users.{$column}"] = "ALTER TABLE users ADD COLUMN {$column} {$definition}";
+            }
+        }
+
         // Users reached by address have no phone number. It has to be NULL
         // rather than '': the unique index treats every empty string as the
         // same value, so a second address-only user could not be stored, and
@@ -126,6 +141,10 @@ final class Db
                     phone      VARCHAR(20)  NULL,
                     address    VARCHAR(190) NULL,
                     invite_code VARCHAR(64) NULL,
+                    notify_zero    TINYINT(1) NOT NULL DEFAULT 1,
+                    notify_daily   TINYINT(1) NOT NULL DEFAULT 0,
+                    notify_monthly TINYINT(1) NOT NULL DEFAULT 1,
+                    notify_time    TIME       NULL,
                     is_active  TINYINT(1)   NOT NULL DEFAULT 1,
                     created_at DATETIME     NOT NULL,
                     PRIMARY KEY (id),

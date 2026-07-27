@@ -295,6 +295,26 @@ first, and free-form messages inside it cost nothing. The scheduled messages
 below are business-initiated, which is Meta's billable category and needs an
 approved template.
 
+## Notification settings
+
+Each user chooses what they want and when, at `/settings` in the portal:
+
+| Setting | Default | What it sends |
+|---|---|---|
+| Störungsmeldung | on | The plant produced nothing, or the logger went quiet |
+| Täglicher Ertrag | off | The day's figures so far |
+| Monatsbericht | on | A report on the month that just ended, at the start of a month |
+| Uhrzeit | `JOB_TRIGGER_TIME` | When those go out, using the browser's own time picker |
+
+The defaults match how the job behaved before the settings existed, so
+upgrading changes nothing until somebody opens the page. Because the time is
+per user, one household member can take the fault alerts at breakfast while
+another gets only the monthly report - the job asks each account separately
+rather than checking one global schedule.
+
+Midday remains a sensible time: by then a working plant has produced something
+on any day of the year, while a broken one is still at zero.
+
 ## The Job
 
 `job.php` runs every 15 minutes:
@@ -303,16 +323,17 @@ approved template.
 */15 * * * * php /path/to/pv/job.php
 ```
 
-It acts on two rules, both anchored at `JOB_TRIGGER_TIME` (12:15 by default,
-in `PV_TIMEZONE`):
+What it sends is decided per user in the notification settings above. For each
+account whose chosen time has passed today it considers:
 
-1. **Beginning of the month** - a report on the month that just ended: total
+1. **A fault alert** - the plant produced less than `PV_MIN_MIDDAY_WH`, or no
+   fresh readings exist at all, in which case the logger is reported as the
+   fault instead: with a stalled upload there is no way to tell whether the
+   panels are working.
+2. **The day's figures**, for those who asked for them.
+3. **A report on the month that just ended**, at the start of a month: total
    production, earnings, change against the previous month, change against the
    same month a year earlier, and the best and weakest day.
-2. **Every day** - if the plant has produced less than `PV_MIN_MIDDAY_WH` by
-   the trigger time, an alert. If no fresh readings exist at all, the logger is
-   reported as the fault instead, because with a stalled upload there is no way
-   to tell whether the panels are working.
 
 Everything else is a no-op, so 94 of the 96 daily runs only check the clock.
 The frequent cadence buys resilience, not freshness: what has already been sent

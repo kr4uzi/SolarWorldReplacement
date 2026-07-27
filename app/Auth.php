@@ -159,6 +159,48 @@ final class Auth
         return self::userById((int)$user['id']);
     }
 
+    /**
+     * Which messages a user wants, and when.
+     *
+     * notify_time is NULL when they have not chosen one, which means the
+     * installation-wide JOB_TRIGGER_TIME applies.
+     */
+    public static function settings(array $user): array
+    {
+        return [
+            'zero'    => (bool)($user['notify_zero'] ?? true),
+            'daily'   => (bool)($user['notify_daily'] ?? false),
+            'monthly' => (bool)($user['notify_monthly'] ?? true),
+            'time'    => self::notifyTime($user),
+        ];
+    }
+
+    /** 'HH:MM', falling back to the installation default. */
+    public static function notifyTime(array $user): string
+    {
+        $time = trim((string)($user['notify_time'] ?? ''));
+        if ($time === '') {
+            $time = (string)Env::get('JOB_TRIGGER_TIME', '12:15');
+        }
+
+        return preg_match('/^(\d{1,2}):(\d{2})/', $time, $m) === 1
+            ? sprintf('%02d:%02d', min(23, (int)$m[1]), min(59, (int)$m[2]))
+            : '12:15';
+    }
+
+    public static function saveSettings(int $userId, bool $zero, bool $daily, bool $monthly, string $time): void
+    {
+        $time = preg_match('/^(\d{1,2}):(\d{2})$/', trim($time), $m) === 1
+            ? sprintf('%02d:%02d:00', min(23, (int)$m[1]), min(59, (int)$m[2]))
+            : null;
+
+        $statement = Db::conn()->prepare(
+            'UPDATE users SET notify_zero = ?, notify_daily = ?, notify_monthly = ?, notify_time = ?
+             WHERE id = ?'
+        );
+        $statement->execute([(int)$zero, (int)$daily, (int)$monthly, $time, $userId]);
+    }
+
     /** Accepts either a phone number or an address. */
     public static function removeUser(string $contact): bool
     {

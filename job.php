@@ -6,10 +6,14 @@ declare(strict_types=1);
  *
  *     *\/15 * * * * php /path/to/pv/job.php
  *
- * It acts on two rules, both anchored at 12:15 local time:
+ * What it sends is decided per user, in the portal's notification settings:
  *
- *   1. Beginning of the month - send a report on the month that just ended.
- *   2. Every day - if the plant has produced nothing by 12:15, raise an alert.
+ *   - a fault alert when the plant produces nothing, or the logger goes quiet
+ *   - the day's figures, for those who want them
+ *   - a report on the month that just ended, at the start of a month
+ *
+ * Each account also carries its own time of day, so the job cannot ask "is it
+ * time yet" once for everybody - it asks per user.
  *
  * Everything else is a no-op, so 94 of the 96 daily runs do nothing but check
  * the clock. The frequent cadence buys resilience rather than freshness: if
@@ -82,89 +86,116 @@ function markSent(string $key): void
 }
 
 /**
- * Send one message to every active user that has not had it yet.
- * These are business-initiated, so they go out as an approved template.
+ * Send one message to one user, unless they have already had it.
+ *
+ * The job_runs key carries the user id, so a recipient who could not be
+ * reached is retried on the next run without re-sending to everybody else.
  */
-function deliver(string $baseKey, string $message): void
+function deliverTo(array $user, string $baseKey, string $message): void
 {
     global $dryRun;
 
-    $users = Auth::activeUsers();
-    if ($users === []) {
-        say("No users configured - nothing to send. Add one: php setup.php \"Name\" +49...");
+    $key = $baseKey . '#' . $user['id'];
+    if (alreadySent($key)) {
         return;
     }
 
-    foreach ($users as $user) {
-        $key = $baseKey . '#' . $user['id'];
-        if (alreadySent($key)) {
-            continue;
-        }
+    $address = Messenger::addressFor($user);
+    if ($address === '') {
+        say("skipped {$baseKey} for {$user['name']}: no address yet (invite not opened)");
+        return;
+    }
 
-        if ($dryRun) {
-            say('[dry-run] would send ' . $baseKey . ' to ' . Messenger::addressFor($user));
-            continue;
-        }
+    if ($dryRun) {
+        say("[dry-run] would send {$baseKey} to {$address} ({$user['name']})");
+        return;
+    }
 
-        $address = Messenger::addressFor($user);
-        $result  = Messenger::notify($address, $message);
-        if ($result['ok']) {
-            markSent($key);
-            say("sent {$baseKey} to {$address}");
-        } else {
-            say("FAILED {$baseKey} to {$address} (HTTP {$result['status']}): {$result['body']}");
-        }
+    $result = Messenger::notify($address, $message);
+    if ($result['ok']) {
+        markSent($key);
+        say("sent {$baseKey} to {$address} ({$user['name']})");
+    } else {
+        say("FAILED {$baseKey} to {$address} (HTTP {$result['status']}): {$result['body']}");
     }
 }
 
-// --- Is it time yet? --------------------------------------------------------
+// --- Per-user schedule ------------------------------------------------------
 
-$triggerTime = (string)Env::get('JOB_TRIGGER_TIME', '12:15');
-$triggerTs   = strtotime('today ' . $triggerTime);
-if ($triggerTs === false) {
-    fwrite(STDERR, "Invalid JOB_TRIGGER_TIME '{$triggerTime}', expected HH:MM\n");
-    exit(1);
+/**
+ * Has this user's chosen time passed today?
+ *
+ * Each account carries its own time, so the job cannot ask the question once
+ * for everybody. Anything from that moment until midnight counts as "due":
+ * what has already been sent is recorded in job_runs, so a late run delivers
+ * rather than skipping - which is the whole point of running every 15 minutes.
+ */
+function isDue(array $user): bool
+{
+    $due = strtotime('today ' . Auth::notifyTime($user));
+
+    return $due !== false && time() >= $due;
 }
 
-if (time() < $triggerTs) {
-    if ($verbose) {
-        echo "Before {$triggerTime}, nothing to do.\n";
-    }
-    exit(0);
-}
-
-// --- 1. Monthly report ------------------------------------------------------
-
-// Normally this fires on the 1st. The window exists so a host that was down
-// on the 1st still delivers the report a day or two later instead of losing
-// the month entirely - the job_runs key stops it going out twice.
 $catchUpDays = max(1, (int)Env::get('JOB_MONTHLY_CATCHUP_DAYS', 3));
+$threshold   = (float)Env::get('PV_MIN_MIDDAY_WH', 100);
+$maxAgeMin   = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
+$dateKey     = date('Y-m-d');
 
-if ((int)date('j') <= $catchUpDays) {
-    $firstOfLastMonth = strtotime('first day of last month');
-    $month = (int)date('n', $firstOfLastMonth);
-    $year  = (int)date('Y', $firstOfLastMonth);
+// Read the plant once, not per user.
+$today      = Data::today();
+$ageMinutes = $today['ts'] > 0 ? (time() - $today['ts']) / 60 : INF;
+$todayTotal = array_sum($today['wh']);
 
-    deliver(sprintf('summary-%04d-%02d', $year, $month), Messages::monthlySummary($month, $year));
+$loggerOffline = $ageMinutes > $maxAgeMin;
+$noProduction  = !$loggerOffline && $todayTotal < $threshold;
+
+$firstOfLastMonth = strtotime('first day of last month');
+$lastMonth        = (int)date('n', $firstOfLastMonth);
+$lastMonthYear    = (int)date('Y', $firstOfLastMonth);
+
+$users = Auth::activeUsers();
+if ($users === []) {
+    say('No users configured - nothing to send. Add one: php setup.php invite "Name"');
 }
 
-// --- 2. No production today -------------------------------------------------
+foreach ($users as $user) {
+    if (!isDue($user)) {
+        continue;
+    }
 
-$today      = Data::today();
-$threshold  = (float)Env::get('PV_MIN_MIDDAY_WH', 100);
-$maxAgeMin  = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
-$ageMinutes = $today['ts'] > 0 ? (time() - $today['ts']) / 60 : INF;
-$dateKey    = date('Y-m-d');
+    $settings = Auth::settings($user);
 
-if ($ageMinutes > $maxAgeMin) {
-    // With no fresh readings we cannot say whether the plant is producing, so
-    // report the upload as the fault rather than blaming the panels.
-    $newest = $today['ts'] > 0 ? $today['ts'] : Data::newestDay();
-    deliver('offline-' . $dateKey, Messages::loggerOffline($newest, $ageMinutes / 60));
-} elseif (array_sum($today['wh']) < $threshold) {
-    deliver('zeroday-' . $dateKey, Messages::noProduction($today, $threshold));
-} elseif ($verbose) {
-    say('Production OK: ' . Messages::kwh(array_sum($today['wh'])) . ' by ' . date('H:i'));
+    // 1. Something is wrong with the plant.
+    if ($settings['zero']) {
+        if ($loggerOffline) {
+            // With no fresh readings we cannot say whether the plant is
+            // producing, so report the upload as the fault rather than
+            // blaming the panels.
+            $newest = $today['ts'] > 0 ? $today['ts'] : Data::newestDay();
+            deliverTo($user, 'offline-' . $dateKey, Messages::loggerOffline($newest, $ageMinutes / 60));
+        } elseif ($noProduction) {
+            deliverTo($user, 'zeroday-' . $dateKey, Messages::noProduction($today, $threshold));
+        }
+    }
+
+    // 2. The day's figures, for those who want them.
+    if ($settings['daily']) {
+        deliverTo($user, 'daily-' . $dateKey, Messages::today());
+    }
+
+    // 3. The month that just ended.
+    if ($settings['monthly'] && (int)date('j') <= $catchUpDays) {
+        deliverTo(
+            $user,
+            sprintf('summary-%04d-%02d', $lastMonthYear, $lastMonth),
+            Messages::monthlySummary($lastMonth, $lastMonthYear)
+        );
+    }
+}
+
+if ($verbose && !$loggerOffline && !$noProduction) {
+    say('Production OK: ' . Messages::kwh($todayTotal) . ' by ' . date('H:i'));
 }
 
 // --- Housekeeping -----------------------------------------------------------
