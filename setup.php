@@ -11,6 +11,7 @@ declare(strict_types=1);
  *   php setup.php remove +49151...          delete an account and its tokens
  *   php setup.php check                     verify the whole deployment
  *   php setup.php telegram-status           ask Telegram about the webhook
+ *   php setup.php login <who>               mint a portal link on the terminal
  *
  * Adding a user sends them a welcome message over the configured transport.
  * Pass --no-message to skip it; it is skipped automatically while that
@@ -82,6 +83,7 @@ function usage(): void
       php setup.php remove <contact>           delete a user
       php setup.php check                      verify the whole deployment
       php setup.php test <contact> [text]      send one message and show the result
+      php setup.php login <name|id|contact>    mint a portal link on the terminal
 
     Telegram:
       php setup.php invite <name>              create a user and print their invite link
@@ -128,6 +130,56 @@ function sendWelcome(array $user, bool $skip): void
         echo "Check that the template '{$template}' is approved and that META_TOKEN "
            . "is a non-expiring System User token.\n";
     }
+}
+
+/**
+ * Mint a portal link and print it here instead of sending it.
+ *
+ * Issuing a token is the only menu action that writes to the database, so when
+ * the bot answers for month and year but not for Portal, this separates the
+ * two possibilities: a database problem, or a messaging one. It also gets an
+ * operator into the portal when the bot is down.
+ */
+function runLogin(string $who): int
+{
+    if ($who === '') {
+        fail('Usage: php setup.php login <name|id|contact>');
+    }
+
+    $user = ctype_digit($who) ? Auth::userById((int)$who) : null;
+    $user ??= Auth::userByAddress($who) ?? Auth::userByPhone($who);
+
+    if ($user === null) {
+        foreach (Auth::activeUsers() as $candidate) {
+            if (strcasecmp($candidate['name'], $who) === 0) {
+                $user = $candidate;
+                break;
+            }
+        }
+    }
+
+    if ($user === null) {
+        fail("No user matches '{$who}'. See: php setup.php list");
+    }
+
+    try {
+        $token = Auth::issueToken((int)$user['id']);
+    } catch (Throwable $e) {
+        echo "Token creation FAILED: {$e->getMessage()}\n\n";
+        echo "This is the same write the Portal menu item performs, so the bot\n";
+        echo "cannot issue login links either. Check that the database user may\n";
+        echo "INSERT into login_tokens, and that the schema is current:\n";
+        echo "  php setup.php init\n";
+        return 1;
+    }
+
+    $ttl = max(1, (int)PV\Env::get('LOGIN_TOKEN_TTL_MINUTES', 15));
+
+    echo "Portal link for {$user['name']} (valid {$ttl} minutes, single use):\n\n";
+    echo '  ' . PV\Router::url('login') . '?t=' . urlencode($token) . "\n\n";
+    echo "Token stored as a hash - this is the only time the link exists.\n";
+
+    return 0;
 }
 
 /**
@@ -498,6 +550,10 @@ if ($command === 'check') {
 
 if ($command === 'test') {
     exit(runTest($argv[2] ?? '', $argv[3] ?? null));
+}
+
+if ($command === 'login') {
+    exit(runLogin($argv[2] ?? ''));
 }
 
 if ($command === 'invite') {

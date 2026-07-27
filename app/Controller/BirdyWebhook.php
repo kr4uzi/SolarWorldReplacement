@@ -50,8 +50,15 @@ final class BirdyWebhook implements Handler
             return;
         }
 
-        foreach ($this->messages($payload) as $message) {
-            $this->respondTo($message);
+        // Runs after the response has been flushed, so an exception would be
+        // invisible - record it where the operator can find it.
+        try {
+            foreach ($this->messages($payload) as $message) {
+                $this->respondTo($message);
+            }
+        } catch (\Throwable $e) {
+            $this->log(sprintf('ERROR %s: %s (%s:%d)',
+                get_class($e), $e->getMessage(), basename($e->getFile()), $e->getLine()));
         }
     }
 

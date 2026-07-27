@@ -50,13 +50,22 @@ final class TelegramWebhook implements Handler
             return;
         }
 
-        if (isset($update['callback_query'])) {
-            $this->handleCallback($update['callback_query']);
-            return;
-        }
+        // Everything past this point runs after the response has been sent,
+        // so an exception here reaches nobody: Telegram already has its 200,
+        // the user sees silence, and only the server's error log knows. Catch
+        // it and put it somewhere the operator actually looks.
+        try {
+            if (isset($update['callback_query'])) {
+                $this->handleCallback($update['callback_query']);
+                return;
+            }
 
-        if (isset($update['message'])) {
-            $this->handleMessage($update['message']);
+            if (isset($update['message'])) {
+                $this->handleMessage($update['message']);
+            }
+        } catch (\Throwable $e) {
+            $this->log(sprintf('ERROR %s: %s (%s:%d)',
+                get_class($e), $e->getMessage(), basename($e->getFile()), $e->getLine()));
         }
     }
 

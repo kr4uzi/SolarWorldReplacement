@@ -191,11 +191,15 @@ final class Auth
         $token = bin2hex(random_bytes(32));
         $ttl   = max(1, (int)Env::get('LOGIN_TOKEN_TTL_MINUTES', 15));
 
+        // The TTL is interpolated rather than bound: with native prepared
+        // statements some MySQL builds reject a placeholder as the INTERVAL
+        // quantity, which would fail here and nowhere else. It is cast to int
+        // on the line above, so there is nothing to inject.
         $insert = Db::conn()->prepare(
             'INSERT INTO login_tokens (user_id, token_hash, created_at, expires_at)
-             VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? MINUTE))'
+             VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ' . $ttl . ' MINUTE))'
         );
-        $insert->execute([$userId, hash('sha256', $token), $ttl]);
+        $insert->execute([$userId, hash('sha256', $token)]);
 
         return $token;
     }

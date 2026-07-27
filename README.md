@@ -492,6 +492,14 @@ controller as the router, so the same URLs work without Apache.
 **Issue**: Every URL 404s, or the dashboard loads but `/api` does not
 - **Solution**: `mod_rewrite` is off or `AllowOverride` forbids the `.htaccess`.
 
+**Issue**: The bot answers for month and year, but Portal does nothing
+- **Solution**: Issuing a login token is the only menu action that writes to
+  the database, so it fails on its own when the others work. Reproduce it away
+  from the bot with `php setup.php login <name>`, which performs the same write
+  and prints the error. Set `PV_WEBHOOK_LOG` as well: everything after the
+  webhook's `200 OK` runs with the response already sent, so failures there are
+  recorded in that log and nowhere else.
+
 **Issue**: The bot never answers
 - **Solution**: Confirm the number is registered (`php setup.php list`) and
   that `META_APP_SECRET` matches the app - a signature mismatch returns 403.
