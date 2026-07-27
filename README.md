@@ -1,11 +1,11 @@
 # PV Data Logger - Web Visualization
 
-A PHP application for photovoltaic monitoring: a web dashboard behind WhatsApp-based login, a WhatsApp bot for on-demand figures, and a scheduled job that reports monthly totals and alerts when the plant stops producing. Automatically adapts to support any number of inverters.
+A PHP application for photovoltaic monitoring: a web dashboard behind chat-based login, a messaging bot for on-demand figures, and a scheduled job that reports monthly totals and alerts when the plant stops producing. Automatically adapts to support any number of inverters.
 
 ## Features
 
-- **WhatsApp Login**: No passwords - a one-time link from the bot opens the portal
-- **WhatsApp Bot**: German menu for month and year totals, in kWh and money
+- **Chat Login**: No passwords - a one-time link from the bot opens the portal
+- **Chat Bot**: German menu for month and year totals, in kWh and money
 - **Monitoring**: Monthly report on the 1st, and an alert when the plant stops producing
 - **Real-time Dashboard**: Shows today's, this month's, and this year's energy production
 - **Multiple Time Views**:
@@ -56,7 +56,7 @@ The three policies exist because one global gate would not work:
 
 | Route | Policy | Why |
 |---|---|---|
-| `/` and `/api` | `session` | Portal users, signed in via WhatsApp |
+| `/` and `/api` | `session` | Portal users, signed in from the chat bot |
 | `/login`, `/logout` | `public` | Must be reachable *before* a session exists |
 | `/webhook` | `signature` | Meta is not a user and can never hold a session; it proves itself with an HMAC |
 
@@ -77,12 +77,12 @@ php setup.php remove +4915112345678
 php setup.php check                       # verify the whole deployment
 ```
 
-Adding a user sends them a WhatsApp welcome message introducing the menu. It is
+Adding a user sends them a welcome message introducing the menu. On WhatsApp it is
 a template message - a new user has never written to us, so there is no open
 service window and Meta permits nothing else, which also makes an unapproved
 template the likeliest reason for it to fail. The account is created either
 way; a failed greeting is reported, never fatal. Pass `--no-message` to skip
-it, and it is skipped automatically while WhatsApp is still unconfigured.
+it, and it is skipped automatically while the transport is still unconfigured.
 
 After pulling a new version, run `php setup.php init` - it applies whatever
 columns that version added and leaves existing rows untouched. `check` reports
@@ -104,14 +104,20 @@ Logging in works like this:
 1. The user messages the bot and picks **Portal**.
 2. A single-use token is minted; only its SHA-256 hash is stored, so a database
    leak yields nothing usable.
-3. The link arrives on WhatsApp and is valid for `LOGIN_TOKEN_TTL_MINUTES`.
-4. Opening it starts a session and immediately redirects, which strips the
+3. The link arrives in the chat and is valid for `LOGIN_TOKEN_TTL_MINUTES`.
+4. Opening it only *checks* the token and shows a confirmation; the button's
+   POST is what redeems it. Anything may fetch a link that lands in a chat -
+   Telegram builds a preview card, scanners and antivirus proxies follow URLs -
+   and a link redeemed by a plain `GET` would already be dead when its owner
+   tapped it, reporting itself only as "expired". Telegram's own preview is
+   disabled at source too.
+5. Confirming starts a session and immediately redirects, which strips the
    token from the address bar, the browser history and any `Referer` header.
 
 Requesting a new link invalidates any previous one, so an old link sitting in
 the chat history stops working.
 
-Because the link travels over WhatsApp, whoever holds the phone can sign in.
+Because the link travels through the chat, whoever holds the phone can sign in.
 That is inherent to the design and fine for a household, but it is why the
 tokens are short-lived and single-use - and why the portal should be HTTPS
 only, since the token travels in a URL.
