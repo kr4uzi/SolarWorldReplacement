@@ -12,6 +12,6 @@ final class Logout implements Handler
     {
         Auth::logout();
 
-        header('Location: ' . Router::url(''), true, 302);
+        header('Location: ' . Router::path(), true, 302);
     }
 }

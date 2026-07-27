@@ -498,6 +498,15 @@ controller as the router, so the same URLs work without Apache.
 **Issue**: Every URL 404s, or the dashboard loads but `/api` does not
 - **Solution**: `mod_rewrite` is off or `AllowOverride` forbids the `.htaccess`.
 
+**Issue**: The login link works, but the dashboard then says "Kein Zugriff"
+- **Solution**: The session cookie is not reaching the dashboard. Probe it with
+  `WEBHOOK_DIAG_KEY` set: `curl "https://example.com/pv/?diag=THE_KEY"` reports
+  whether a cookie arrived, the cookie's path and scheme, whether PHP can write
+  its session files, and names the likely cause. The usual one is `PORTAL_URL`
+  naming a different host than the browser uses - `www.` against the bare
+  domain, or `http` against `https` - since a cookie set on one is not sent to
+  the other.
+
 **Issue**: The bot answers for month and year, but Portal does nothing
 - **Solution**: Issuing a login token is the only menu action that writes to
   the database, so it fails on its own when the others work. Reproduce it away

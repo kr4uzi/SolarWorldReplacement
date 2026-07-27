@@ -72,6 +72,23 @@ final class Router
         return (self::basePath() ?: '') . '/' . ltrim($path, '/');
     }
 
+    /**
+     * Host-relative link to a route, for redirects within the application.
+     *
+     * Distinct from url() on purpose. url() is absolute because it builds links
+     * that leave the server and land in a chat. A redirect must not be: sending
+     * the browser to PORTAL_URL after login moves it to whatever host that names,
+     * and if it differs from the one being browsed - www against bare domain,
+     * http against https - the session cookie just set is not sent along, and
+     * the dashboard refuses a user who did log in successfully.
+     */
+    public static function path(string $route = ''): string
+    {
+        $base = self::basePath();
+
+        return $route === '' ? ($base === '' ? '/' : $base . '/') : $base . '/' . ltrim($route, '/');
+    }
+
     /** Raw request body, read once so the signature check and the controller agree. */
     public static function rawBody(): string
     {
@@ -122,6 +139,10 @@ final class Router
         if ($policy === self::AUTH_SESSION) {
             if (Auth::user() !== null) {
                 return true;
+            }
+            if (self::isDiagnostic()) {
+                self::reportSession();
+                return false;
             }
             self::denyUnauthenticated($path);
             return false;
@@ -237,6 +258,69 @@ final class Router
         }
 
         return true;
+    }
+
+    /**
+     * Why a session was not accepted.
+     *
+     * Logging in and then being refused looks the same from outside whichever
+     * link in the chain broke: the cookie was never stored, was stored for
+     * another host or path, or the session data itself could not be written.
+     * This reports each of those separately. Guarded by WEBHOOK_DIAG_KEY.
+     */
+    private static function reportSession(): void
+    {
+        Auth::startSession();
+
+        $savePath = session_save_path() ?: sys_get_temp_dir();
+        $params   = session_get_cookie_params();
+
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'verdict' => self::sessionVerdict($savePath),
+            'request' => [
+                'host'        => (string)($_SERVER['HTTP_HOST'] ?? ''),
+                'uri'         => (string)($_SERVER['REQUEST_URI'] ?? ''),
+                'https_seen'  => Auth::isHttps(),
+                'base_path'   => self::basePath(),
+                'portal_url'  => (string)Env::get('PORTAL_URL', ''),
+            ],
+            'cookie' => [
+                'sent_by_browser' => isset($_COOKIE[session_name()]),
+                'name'            => session_name(),
+                'path'            => $params['path'],
+                'secure'          => $params['secure'],
+                'samesite'        => $params['samesite'] ?? '',
+            ],
+            'session' => [
+                'id'             => session_id() === '' ? null : substr(session_id(), 0, 8) . '…',
+                'save_path'      => $savePath,
+                'path_writable'  => is_writable($savePath),
+                'holds_user'     => isset($_SESSION['pv_user_id']),
+            ],
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), "\n";
+    }
+
+    private static function sessionVerdict(string $savePath): string
+    {
+        if (!is_writable($savePath)) {
+            return "PHP cannot write sessions to {$savePath}, so nothing survives the redirect. "
+                 . 'Point session.save_path at a writable directory.';
+        }
+        if (!isset($_COOKIE[session_name()])) {
+            $portal = rtrim((string)Env::get('PORTAL_URL', ''), '/');
+            $host   = (string)($_SERVER['HTTP_HOST'] ?? '');
+
+            return $portal !== '' && !str_contains($portal, $host)
+                ? "The browser sent no session cookie, and PORTAL_URL ({$portal}) names a different "
+                . "host than the one being browsed ({$host}) - a cookie set on one is not sent to "
+                . 'the other. Make them match.'
+                : 'The browser sent no session cookie. Either none was ever stored, or it was '
+                . 'stored for a different path or scheme than this request uses.';
+        }
+
+        return 'A session cookie arrived but holds no user - the session expired, was cleared, '
+             . 'or login never completed.';
     }
 
     /** API callers get JSON; humans get a page telling them how to get in. */

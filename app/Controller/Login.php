@@ -55,7 +55,7 @@ final class Login implements Handler
         }
 
         Auth::login($user);
-        header('Location: ' . Router::url(''), true, 302);
+        header('Location: ' . Router::path(), true, 302);
     }
 
     /** The one tap that actually spends the token. */
@@ -66,7 +66,7 @@ final class Login implements Handler
         header('Cache-Control: no-store, private');
         header('X-Robots-Tag: noindex, nofollow');
 
-        $action = Router::url('login');
+        $action = Router::path('login');
         require dirname(__DIR__, 2) . '/views/login.php';
     }
 
