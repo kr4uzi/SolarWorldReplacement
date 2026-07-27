@@ -266,7 +266,18 @@ final class Auth
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
+
+        // Sessions outlive the browser being closed. Without a lifetime the
+        // cookie dies with the tab and PHP collects the data after ~24
+        // minutes, so the portal would demand a fresh link several times a
+        // day - and every one of those costs a trip through the chat bot.
+        $days     = max(1, (int)Env::get('PORTAL_SESSION_DAYS', 30));
+        $lifetime = $days * 86400;
+
+        ini_set('session.gc_maxlifetime', (string)$lifetime);
+
         session_set_cookie_params([
+            'lifetime' => $lifetime,
             'httponly' => true,
             'samesite' => 'Lax',
             'secure'   => self::isHttps(),
@@ -282,13 +293,6 @@ final class Auth
         // reused to ride the authenticated session.
         session_regenerate_id(true);
         $_SESSION[self::SESSION_KEY] = (int)$user['id'];
-    }
-
-    public static function logout(): void
-    {
-        self::startSession();
-        $_SESSION = [];
-        session_destroy();
     }
 
     /** The signed-in user, or null. */

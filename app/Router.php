@@ -33,7 +33,6 @@ final class Router
             ''        => [Controller\Dashboard::class, self::AUTH_SESSION],
             'api'     => [Controller\Api::class,       self::AUTH_SESSION],
             'login'   => [Controller\Login::class,     self::AUTH_PUBLIC],
-            'logout'  => [Controller\Logout::class,    self::AUTH_PUBLIC],
             'webhook'       => [Controller\Webhook::class,      self::AUTH_SIGNATURE],
             'birdy-webhook' => [Controller\BirdyWebhook::class, self::AUTH_BIRDY],
             'telegram-webhook' => [Controller\TelegramWebhook::class, self::AUTH_TELEGRAM],

@@ -33,6 +33,10 @@ final class Login implements Handler
         }
 
         if ($token === '') {
+            if (Auth::user() !== null) {
+                header('Location: ' . Router::path(), true, 302);
+                return;
+            }
             $this->deny('Dieser Link ist unvollständig - bitte fordere einen neuen an.');
             return;
         }
@@ -43,6 +47,26 @@ final class Login implements Handler
         }
 
         $user = Auth::peekToken($token);
+
+        // Already signed in? Then there is nothing to confirm - go straight
+        // through. The confirmation step exists to stop link prefetchers from
+        // spending a token, and a prefetcher never carries the session cookie,
+        // so skipping it here gives nothing away.
+        $current = Auth::user();
+        if ($current !== null) {
+            if ($user !== null) {
+                // Spend the token so it cannot linger, and honour the link if
+                // it belongs to somebody else - switching account is what
+                // opening their link is asking for.
+                Auth::consumeToken($token);
+                if ((int)$user['id'] !== (int)$current['id']) {
+                    Auth::login($user);
+                }
+            }
+            header('Location: ' . Router::path(), true, 302);
+            return;
+        }
+
         if ($user === null) {
             $this->deny('Dieser Link ist abgelaufen oder wurde bereits verwendet.');
             return;

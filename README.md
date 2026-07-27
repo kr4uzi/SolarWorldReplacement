@@ -114,6 +114,16 @@ Logging in works like this:
 5. Confirming starts a session and immediately redirects, which strips the
    token from the address bar, the browser history and any `Referer` header.
 
+Opening a link while already signed in skips the confirmation entirely and goes
+straight to the dashboard - the step exists to stop prefetchers, and a
+prefetcher never carries the session cookie. The token is spent anyway so it
+cannot linger, and a link belonging to somebody else switches to that account,
+since that is what opening it asks for.
+
+Sessions last `PORTAL_SESSION_DAYS` (30 by default) and survive the browser
+closing, so a new link is only needed once that lapses. There is no logout: for
+a household plant it earns nothing, and access is revoked by removing the user.
+
 Requesting a new link invalidates any previous one, so an old link sitting in
 the chat history stops working.
 

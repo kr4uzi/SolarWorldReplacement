@@ -13,9 +13,8 @@ final class Dashboard implements Handler
         header('Content-Type: text/html; charset=utf-8');
 
         // Consumed by views/dashboard.php.
-        $user      = Auth::user();
-        $apiUrl    = Router::url('api');
-        $logoutUrl = Router::url('logout');
+        $user   = Auth::user();
+        $apiUrl = Router::path('api');
 
         require dirname(__DIR__, 2) . '/views/dashboard.php';
     }
