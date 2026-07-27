@@ -110,6 +110,36 @@ php setup.php channel-priority 3 50       # move a channel down the list
 php setup.php channel-remove 3            # drop one way of reaching someone
 ```
 
+### Merging duplicate accounts
+
+Earlier versions could leave several accounts for one person: `invite` always
+inserted a new row, and a phone number could be stored where nothing could
+reach it. Both are fixed, but an installation that ran them still carries the
+result.
+
+```bash
+php setup.php merge-duplicates            # dry run: shows exactly what it would do
+php setup.php merge-duplicates --apply
+php setup.php merge 2 5 7 --apply         # specific accounts, when the names differ
+```
+
+Names are grouped without case or surrounding space, since that is what the
+duplicates look like - the same name typed twice. The survivor is the account
+that can already be reached, and the oldest of those, so ids and notification
+settings stay where they have been.
+
+It merges rather than deletes, because a duplicate is often the row carrying
+the channel that actually works: every channel with an address moves onto the
+survivor, keeping its priority. Pending invites on the folded-in accounts are
+dropped - they would have activated an account that is about to stop existing -
+along with their login tokens and delivery records. Notification settings come
+from the survivor, and any difference is printed rather than silently resolved.
+The one exception is the send time: if the survivor never had one and a
+duplicate did, the chosen time wins over the installation default.
+
+Everything happens in one transaction, so a failure leaves the accounts exactly
+as they were.
+
 Upgrading an existing installation moves the old `users.address` and
 `users.phone` into channels automatically on the first `setup.php init`, so
 nobody has to be re-invited and links already sent still work. A phone number

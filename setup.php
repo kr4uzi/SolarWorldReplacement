@@ -85,6 +85,196 @@ function contactOf(array $user): string
 }
 
 /** Everything a user can be reached on, including invites not yet opened. */
+/**
+ * Fold duplicate accounts into one.
+ *
+ * Duplicates are a leftover from the versions where `invite` always inserted
+ * and a phone number could be stored where nothing could reach it. They are
+ * quiet: every copy looks correct in a listing, and whichever one is not bound
+ * to a chat simply never hears anything.
+ *
+ * Merging keeps one account and moves everything that can be reached onto it,
+ * rather than deleting the spares outright - a duplicate may be the one
+ * carrying the channel that actually works.
+ *
+ * @param array<int,int> $otherIds accounts to fold in and then delete
+ */
+function mergeUsers(int $keepId, array $otherIds, bool $apply): int
+{
+    $keep = Auth::userById($keepId);
+    if ($keep === null) {
+        fail("No account with id {$keepId}.");
+    }
+
+    $otherIds = array_values(array_filter($otherIds, static fn($id) => $id !== $keepId));
+    if ($otherIds === []) {
+        echo "Nothing to merge into {$keep['name']} (id {$keepId}).\n";
+        return 0;
+    }
+
+    $keepSettings = Auth::settings($keep);
+    $moved = $dropped = $tokens = $runs = 0;
+    $adoptTime = null;
+
+    echo "Keeping {$keep['name']} (id {$keepId}, " . contactOf($keep) . ")\n";
+
+    foreach ($otherIds as $id) {
+        $other = Auth::userById($id);
+        if ($other === null) {
+            echo "  id {$id}: no such account, skipped\n";
+            continue;
+        }
+
+        echo "  folding in id {$id} (" . contactOf($other) . ")\n";
+
+        foreach (Channel::forUser($id, false) as $channel) {
+            $address = (string)($channel['address'] ?? '');
+
+            // A pending invite is worth nothing once the account it would have
+            // activated is gone, and two pending channels on one transport
+            // just confuse the next invite.
+            if ($address === '') {
+                echo "    drop  pending {$channel['transport']} invite (channel {$channel['id']})\n";
+                $dropped++;
+                continue;
+            }
+
+            echo "    move  {$channel['transport']} {$address} (channel {$channel['id']})\n";
+            $moved++;
+        }
+
+        // A time that was actually chosen beats one that was never set.
+        $otherSettings = Auth::settings($other);
+        if (trim((string)($keep['notify_time'] ?? '')) === ''
+            && trim((string)($other['notify_time'] ?? '')) !== '') {
+            $adoptTime = $otherSettings['time'];
+        }
+
+        // Only the switches are worth reporting. The time is handled above,
+        // and comparing it here would flag every account that simply never
+        // chose one against the installation default - a difference nobody
+        // made and nobody loses.
+        foreach (['zero', 'daily', 'monthly'] as $switch) {
+            if ($otherSettings[$switch] !== $keepSettings[$switch]) {
+                echo "    note  its notification settings differ and are discarded"
+                   . " (keeping id {$keepId}'s)\n";
+                break;
+            }
+        }
+    }
+
+    if ($adoptTime !== null) {
+        echo "  adopting {$adoptTime} as the notification time - id {$keepId} had none set\n";
+    }
+
+    if (!$apply) {
+        echo "\nDry run. Nothing has changed - add --apply to do it.\n";
+        return 0;
+    }
+
+    $pdo = Db::conn();
+    $pdo->beginTransaction();
+
+    try {
+        foreach ($otherIds as $id) {
+            // Channels carrying an address move across; the unique key is on
+            // (transport, address), so nothing can collide by moving.
+            $move = $pdo->prepare(
+                "UPDATE notification_channels SET user_id = ?
+                 WHERE user_id = ? AND address IS NOT NULL AND address <> ''"
+            );
+            $move->execute([$keepId, $id]);
+
+            // Login tokens are single-use and short-lived; a link minted for
+            // an account that is about to stop existing should stop working.
+            $drop = $pdo->prepare('DELETE FROM login_tokens WHERE user_id = ?');
+            $drop->execute([$id]);
+            $tokens += $drop->rowCount();
+
+            // Delivery records are keyed by user id. Left behind they are
+            // inert, but they would never be cleaned up either.
+            $stale = $pdo->prepare('DELETE FROM job_runs WHERE job_key LIKE ?');
+            $stale->execute(['%#' . $id]);
+            $runs += $stale->rowCount();
+
+            // Takes the remaining pending channels with it, by foreign key.
+            $pdo->prepare('DELETE FROM users WHERE id = ?')->execute([$id]);
+        }
+
+        if ($adoptTime !== null) {
+            Auth::saveSettings(
+                $keepId,
+                $keepSettings['zero'],
+                $keepSettings['daily'],
+                $keepSettings['monthly'],
+                $adoptTime
+            );
+        }
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        fail('Merge failed, nothing was changed: ' . $e->getMessage());
+    }
+
+    echo "\nMerged " . count($otherIds) . " account(s) into id {$keepId}:"
+       . " {$moved} channel(s) moved, {$dropped} pending invite(s) dropped,"
+       . " {$tokens} login token(s) and {$runs} delivery record(s) cleared.\n";
+
+    return 0;
+}
+
+/**
+ * Find accounts that are the same person and merge them.
+ *
+ * Grouped by name, compared without case or surrounding space, since that is
+ * what the duplicates actually look like - the same name typed twice.
+ *
+ * The survivor is the account that can already be reached, and the oldest of
+ * those, so ids and notification settings stay where they have been.
+ */
+function runMergeDuplicates(bool $apply): int
+{
+    if (!Db::isInstalled() || !Db::isCurrent()) {
+        fail("Schema is not current. Run: php setup.php init");
+    }
+
+    $groups = [];
+    foreach (Auth::activeUsers() as $user) {
+        $groups[mb_strtolower(trim((string)$user['name']))][] = $user;
+    }
+
+    $duplicates = array_filter($groups, static fn($group) => count($group) > 1);
+
+    if ($duplicates === []) {
+        echo "No duplicates: every account has a name of its own.\n";
+        return 0;
+    }
+
+    foreach ($duplicates as $name => $group) {
+        echo "\n" . count($group) . " accounts named '{$group[0]['name']}':\n";
+
+        // Reachable first, then oldest. An account with a working channel is
+        // the one worth keeping; among equals, the one that has been there
+        // longest, so nothing else has to be renumbered.
+        usort($group, static function (array $a, array $b): int {
+            $aReach = Channel::forUser((int)$a['id']) !== [];
+            $bReach = Channel::forUser((int)$b['id']) !== [];
+
+            return $aReach === $bReach
+                ? (int)$a['id'] <=> (int)$b['id']
+                : ($aReach ? -1 : 1);
+        });
+
+        $keep  = array_shift($group);
+        $folds = array_map(static fn($u) => (int)$u['id'], $group);
+
+        mergeUsers((int)$keep['id'], $folds, $apply);
+    }
+
+    return 0;
+}
+
 function runChannels(string $who): int
 {
     if (!Db::isInstalled()) {
@@ -174,6 +364,10 @@ function usage(): void
       php setup.php channels [name|id]         list where users are reached
       php setup.php channel-priority <id> <n>  reorder a channel (lower goes first)
       php setup.php channel-remove <id>        drop one way of reaching someone
+      php setup.php merge-duplicates           fold same-named accounts into one
+                    [--apply]                  ... for real; without it, a dry run
+      php setup.php merge <keep> <id>...       merge specific accounts
+                    [--apply]
       php setup.php remove <contact>           delete a user
       php setup.php check                      verify the whole deployment
       php setup.php test <contact> [text]      send one message and show the result
@@ -762,6 +956,21 @@ switch ($command) {
             ? "Schema already up to date.\n"
             : "Schema updated:\n  " . implode("\n  ", $applied) . "\n";
         break;
+
+    case 'merge-duplicates':
+        exit(runMergeDuplicates(in_array('--apply', $argv, true)));
+
+    case 'merge':
+        if (!isset($argv[2], $argv[3]) || !ctype_digit((string)$argv[2])) {
+            fail('Usage: php setup.php merge <keep id> <id to fold in>... [--apply]');
+        }
+        $folds = [];
+        foreach (array_slice($argv, 3) as $arg) {
+            if (ctype_digit((string)$arg)) {
+                $folds[] = (int)$arg;
+            }
+        }
+        exit(mergeUsers((int)$argv[2], $folds, in_array('--apply', $argv, true)));
 
     case 'channels':
         exit(runChannels($argv[2] ?? ''));
