@@ -12,7 +12,7 @@ use PV\Messages;
  *
  * Users are addressed by numeric chat id, which is not something anyone can
  * type from memory - so accounts are created with an invite link instead, and
- * the chat id is captured when the user taps it. See Auth::createInvite() and
+ * the chat id is captured when the user taps it. See Channel::invite() and
  * Controller\TelegramWebhook.
  *
  * There is no distinction between a reply and an unprompted message here:
@@ -21,6 +21,9 @@ use PV\Messages;
  */
 final class Telegram implements Transport
 {
+    /** The transport's name, as stored on a channel. */
+    public const NAME = 'telegram';
+
     public const MENU_PORTAL = 'portal';
     public const MENU_MONTH  = 'month';
     public const MENU_YEAR   = 'year';
@@ -36,7 +39,7 @@ final class Telegram implements Transport
 
     public function name(): string
     {
-        return 'telegram';
+        return self::NAME;
     }
 
     public function isConfigured(): bool

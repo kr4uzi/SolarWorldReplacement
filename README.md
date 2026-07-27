@@ -37,6 +37,7 @@ pv/
 │   ├── Env.php         # .env loader
 │   ├── Db.php          # MySQL connection and schema
 │   ├── Auth.php        # Accounts, one-time tokens, sessions
+│   ├── Channel.php     # Where each user can be reached, in order
 │   ├── Data.php        # Reads the logger's CSV/JS files
 │   ├── Chart.php       # Bar charts, drawn with GD
 │   ├── Messages.php    # German user-facing text
@@ -65,9 +66,58 @@ Each route carries its own policy, because one global gate would not work:
 | `/telegram-webhook` | `telegram` | Telegram's secret token, echoed on every delivery |
 | `/webhook` | `signature` | Meta is not a user and can never hold a session; it proves itself with an HMAC |
 
-MySQL holds accounts, login tokens and scheduling state only. Production
-figures continue to be read from the logger's own files through `Data`, so
-there is nothing to import, backfill or keep in sync.
+MySQL holds accounts, channels, login tokens and scheduling state only.
+Production figures continue to be read from the logger's own files through
+`Data`, so there is nothing to import, backfill or keep in sync.
+
+### Notification channels
+
+A user is not reached at "an address" - they are reached over one or more
+**channels**, each pairing a transport with an address it understands, ordered
+by priority:
+
+```
+notification_channels
+  user_id      -> users.id, deleted with them
+  transport    telegram | whatsapp | birdy | http | log  (and whatever comes next)
+  address      chat id / phone number / email - NULL until the channel is claimed
+  priority     0 is tried first; anything billed per message starts at the back
+  invite_code  set while the channel is waiting to be claimed
+  verified_at  when it was
+```
+
+Pairing the address with its transport is the point. The same string means
+different things to different providers - a chat id here, a phone number there
+- and keeping them apart is what stops an address being stored where nothing
+can reach it. That failure is quiet: the account looks correct in a listing and
+simply never receives anything.
+
+**Delivery walks the list and stops at the first channel that works.** A
+message is only a failure once every channel has refused it, which is what
+makes a costly last resort safe to configure: SMS placed below Telegram bills
+nothing until Telegram is actually down. `job.php` reports which channel
+carried each message, and what it tried first.
+
+The address arrives late, because the ones worth having cannot be typed:
+a chat id is a number nobody knows. So a channel is created holding only an
+invite code, and the user's first message fills it in. Adding a second way to
+reach an existing user is therefore the same flow as onboarding them, not a
+special case.
+
+```bash
+php setup.php channels                    # who is reachable where, in order
+php setup.php channel-priority 3 50       # move a channel down the list
+php setup.php channel-remove 3            # drop one way of reaching someone
+```
+
+Upgrading an existing installation moves the old `users.address` and
+`users.phone` into channels automatically on the first `setup.php init`, so
+nobody has to be re-invited and links already sent still work. A phone number
+is only carried over if the configured transport actually dials one - under
+Telegram it identifies nobody, so it stays in the old column rather than
+becoming a channel that can never deliver. The old columns are left in place,
+unused: they are the only copy of that data if this version has to be rolled
+back.
 
 ## Access & Login
 
@@ -167,6 +217,10 @@ only, since the token travels in a URL.
 The application never names a messaging provider. Everything that sends goes
 through `Messenger`, which resolves the transport named in
 `MESSAGING_TRANSPORT`:
+
+A user's channels each name their own transport, so `MESSAGING_TRANSPORT` is
+the *default* - what new invites are opened on - rather than the only one in
+play. Delivery uses whatever each channel says.
 
 | Transport | Purpose |
 |---|---|

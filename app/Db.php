@@ -60,6 +60,32 @@ final class Db
         return self::$pdo = $pdo;
     }
 
+
+    /**
+     * The channels table, in one place: migrate() creates it on a fresh
+     * install and pending() offers the same statement to an upgraded one.
+     */
+    private static function channelTableSql(): string
+    {
+        return "
+                CREATE TABLE IF NOT EXISTS notification_channels (
+                    id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    user_id     INT UNSIGNED NOT NULL,
+                    transport   VARCHAR(32)  NOT NULL,
+                    address     VARCHAR(190) NULL,
+                    priority    TINYINT      NOT NULL DEFAULT 0,
+                    invite_code VARCHAR(64)  NULL,
+                    verified_at DATETIME     NULL,
+                    created_at  DATETIME     NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uniq_channel_address (transport, address),
+                    UNIQUE KEY uniq_channel_invite (invite_code),
+                    KEY idx_channel_user (user_id, priority),
+                    CONSTRAINT fk_channel_user FOREIGN KEY (user_id)
+                        REFERENCES users (id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+    }
+
     /**
      * Schema changes that have not been applied yet.
      *
@@ -76,6 +102,10 @@ final class Db
 
         if (!self::hasTable('users')) {
             return ['schema' => 'not installed'];
+        }
+
+        if (!self::hasTable('notification_channels')) {
+            $pending['notification_channels'] = self::channelTableSql();
         }
 
         if (!self::hasColumn('users', 'address')) {
@@ -169,6 +199,25 @@ final class Db
                         REFERENCES users (id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
+            // Where a user can be reached, one row per way.
+            //
+            // An address is only meaningful next to the transport that
+            // understands it - the same string is a chat id in one row and a
+            // phone number in another - so the two are stored together and
+            // nothing downstream has to guess which it is holding.
+            //
+            // 'priority' orders the attempts: 0 is tried first, and a costly
+            // channel like SMS sits at the bottom, used only when the ones
+            // above it could not deliver.
+            //
+            // 'address' is NULL until the channel is verified, because the
+            // ones worth having cannot be typed in advance: a Telegram chat id
+            // arrives when its owner taps the invite link. That is also why
+            // the invite code lives here rather than on the user - adding a
+            // second channel to an existing account is the same flow as
+            // onboarding, not a special case.
+            'notification_channels' => self::channelTableSql(),
+
             // One row per delivered scheduled message. This is what makes a
             // 15-minute cadence safe: the key is checked before sending, so a
             // message goes out once even though the job runs 96 times a day.
@@ -195,7 +244,99 @@ final class Db
         // Address-only users must hold NULL, not '', for the unique index.
         self::conn()->exec("UPDATE users SET phone = NULL WHERE phone = ''");
 
+        foreach (self::backfillChannels() as $note) {
+            $applied[] = $note;
+        }
+
         return $applied;
+    }
+
+    /**
+     * Move contacts from the users table into notification_channels.
+     *
+     * Before channels existed a user had one address and one phone number, in
+     * columns. Existing accounts must keep working across the upgrade without
+     * anybody being re-invited, so their contacts are copied over on the first
+     * migration and skipped on every one after.
+     *
+     * The old columns are left in place, unused. They are the only copy of the
+     * data if this version has to be rolled back, and dropping them buys
+     * nothing but risk.
+     *
+     * @return array<int,string> what was moved
+     */
+    private static function backfillChannels(): array
+    {
+        // Only ever runs against an empty table: once a single channel exists,
+        // the columns are history and re-copying them would resurrect rows the
+        // operator has since deleted.
+        if ((int)self::conn()->query('SELECT COUNT(*) FROM notification_channels')->fetchColumn() > 0) {
+            return [];
+        }
+
+        $transport = strtolower(trim((string)Env::get('MESSAGING_TRANSPORT', 'log')));
+        $applied   = [];
+
+        // An address was reachable over whatever transport was configured, so
+        // that is the transport it belongs to.
+        $moved = self::conn()->exec(
+            "INSERT INTO notification_channels
+                 (user_id, transport, address, priority, verified_at, created_at)
+             SELECT id, " . self::conn()->quote($transport) . ", address, 0, created_at, created_at
+             FROM users
+             WHERE address IS NOT NULL AND address <> ''"
+        );
+        if ($moved > 0) {
+            $applied[] = "moved {$moved} {$transport} address(es) into notification_channels";
+        }
+
+        // A pending invite becomes a pending channel: same code, so a link
+        // already sent to somebody still works after the upgrade.
+        $invited = self::conn()->exec(
+            "INSERT INTO notification_channels
+                 (user_id, transport, address, priority, invite_code, created_at)
+             SELECT id, " . self::conn()->quote($transport) . ", NULL, 0, invite_code, created_at
+             FROM users
+             WHERE invite_code IS NOT NULL AND invite_code <> ''"
+        );
+        if ($invited > 0) {
+            $applied[] = "moved {$invited} pending invite(s) into notification_channels";
+        }
+
+        // Phone numbers are only carried over when the configured transport
+        // actually dials them. Under Telegram they identify nobody, and
+        // importing them would recreate exactly the unreachable accounts this
+        // table exists to prevent - they stay in users.phone, untouched.
+        if (self::transportUsesPhone($transport)) {
+            $phones = self::conn()->exec(
+                "INSERT INTO notification_channels
+                     (user_id, transport, address, priority, verified_at, created_at)
+                 SELECT id, " . self::conn()->quote($transport) . ", phone, 0, created_at, created_at
+                 FROM users
+                 WHERE phone IS NOT NULL AND phone <> ''
+                   AND (address IS NULL OR address = '')"
+            );
+            if ($phones > 0) {
+                $applied[] = "moved {$phones} phone number(s) into notification_channels";
+            }
+        }
+
+        return $applied;
+    }
+
+    /** Whether a transport addresses people by phone number. */
+    private static function transportUsesPhone(string $transport): bool
+    {
+        $known = Messenger::available()[$transport] ?? null;
+        if ($known === null) {
+            return false;
+        }
+
+        try {
+            return (new $known())->addressKind() === 'phone';
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private static function hasTable(string $table): bool

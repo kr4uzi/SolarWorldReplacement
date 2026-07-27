@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace PV\Controller;
 
 use PV\Auth;
+use PV\Channel;
 use PV\Chart;
 use PV\Env;
 use PV\ErrorPage;
@@ -127,7 +128,7 @@ final class TelegramWebhook implements Handler
             }
         }
 
-        $user = Auth::userByAddress($chatId);
+        $user = Channel::userAt(Telegram::NAME, $chatId);
         if ($user === null) {
             $this->log("message from unregistered chat {$chatId}: " . ($text === '' ? '(no text)' : $text));
 
@@ -161,7 +162,7 @@ final class TelegramWebhook implements Handler
             return;
         }
 
-        $user = Auth::userByAddress($chatId);
+        $user = Channel::userAt(Telegram::NAME, $chatId);
         if ($user === null) {
             $this->log("ignored callback from unregistered chat {$chatId}");
             if ($callbackId !== '') {
@@ -219,11 +220,11 @@ final class TelegramWebhook implements Handler
     /** Bind this chat to the account the invite code belongs to. */
     private function redeem(string $code, string $chatId, array $message): bool
     {
-        if (Auth::userByAddress($chatId) !== null) {
+        if (Channel::userAt(Telegram::NAME, $chatId) !== null) {
             return false; // already bound; fall through to the normal menu
         }
 
-        $user = Auth::bindInvite($code, $chatId);
+        $user = Auth::bindInvite($code, Telegram::NAME, $chatId);
         if ($user === null) {
             $this->log("invalid invite code from chat {$chatId}");
             Telegram::call('sendMessage', [
@@ -319,7 +320,7 @@ final class TelegramWebhook implements Handler
             'update_kind' => isset($update['callback_query']) ? 'callback_query'
                 : (isset($update['message']) ? 'message' : '(unrecognised)'),
             'chat_id'    => $chatId === '' ? null : $chatId,
-            'registered' => $chatId !== '' && Auth::userByAddress($chatId) !== null,
+            'registered' => $chatId !== '' && Channel::userAt(Telegram::NAME, $chatId) !== null,
             'secret_header_present' => isset($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN']),
             'update'     => $update,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), "\n";

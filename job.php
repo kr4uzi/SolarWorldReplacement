@@ -101,26 +101,32 @@ function deliverTo(array $user, string $baseKey, string $message, ?string $png =
         return;
     }
 
-    $address = Messenger::addressFor($user);
-    if ($address === '') {
-        say("skipped {$baseKey} for {$user['name']}: no address yet (invite not opened)");
+    $channels = PV\Channel::forUser((int)$user['id']);
+    if ($channels === []) {
+        say("skipped {$baseKey} for {$user['name']}: no channel yet (invite not opened)");
         return;
     }
 
     if ($dryRun) {
-        say("[dry-run] would send {$baseKey} to {$address} ({$user['name']})"
+        $route = implode(' then ', array_map(
+            static fn($c) => $c['transport'] . ' ' . $c['address'],
+            $channels
+        ));
+        say("[dry-run] would send {$baseKey} to {$user['name']} via {$route}"
             . ($png !== null ? ' with a chart (' . strlen($png) . ' bytes)' : ''));
         return;
     }
 
-    $result = $png === null
-        ? Messenger::notify($address, $message)
-        : Messenger::image($address, $png, $message);
+    // Walks the user's channels and stops at the first that delivers, so a
+    // costly last resort only bills when the ones above it are down.
+    $result = Messenger::deliver($user, $message, $png);
+
     if ($result['ok']) {
         markSent($key);
-        say("sent {$baseKey} to {$address} ({$user['name']})");
+        $note = $result['tried'] === [] ? '' : ' (after ' . implode('; ', $result['tried']) . ')';
+        say("sent {$baseKey} to {$user['name']} via {$result['transport']}{$note}");
     } else {
-        say("FAILED {$baseKey} to {$address} (HTTP {$result['status']}): {$result['body']}");
+        say("FAILED {$baseKey} to {$user['name']}: " . implode('; ', $result['tried'] ?: [$result['body']]));
     }
 }
 

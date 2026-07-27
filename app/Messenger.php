@@ -33,6 +33,20 @@ final class Messenger
         ];
     }
 
+    /**
+     * A specific transport by name, for talking on a channel that names one.
+     *
+     * Distinct from transport(), which answers "what does this installation
+     * use by default" - the setting that decides where new invites are sent.
+     * Delivery cannot use that: a user's channels each name their own.
+     */
+    public static function via(string $name): ?Transport
+    {
+        $known = self::available()[strtolower(trim($name))] ?? null;
+
+        return $known === null ? null : new $known();
+    }
+
     public static function transport(): Transport
     {
         if (self::$transport instanceof Transport) {
@@ -63,9 +77,22 @@ final class Messenger
         return self::transport()->isConfigured();
     }
 
-    /** The address to reach a user on with the current transport. */
+    /**
+     * The address a user is reached at first.
+     *
+     * Delivery goes through deliver(), which walks every channel - this is for
+     * the places that need something to show an operator, like a listing or a
+     * one-off test send.
+     */
     public static function addressFor(array $user): string
     {
+        $channels = Channel::forUser((int)($user['id'] ?? 0));
+        if ($channels !== []) {
+            return (string)$channels[0]['address'];
+        }
+
+        // Pre-channels installations, between pulling the code and running
+        // setup.php init.
         $address = trim((string)($user['address'] ?? ''));
 
         return $address !== '' ? $address : (string)($user['phone'] ?? '');
@@ -103,6 +130,56 @@ final class Messenger
         return $png === null || $png === ''
             ? self::notify($address, $caption)
             : self::transport()->sendImage($address, $png, $caption);
+    }
+
+    /**
+     * Send to a user over whichever of their channels works.
+     *
+     * The channels are tried in priority order and the first success ends it,
+     * which is what makes a costly last resort safe to configure: SMS is only
+     * reached for when everything above it could not deliver, so it bills
+     * nothing on a normal day.
+     *
+     * A failure is only a failure once every channel has refused. That is
+     * deliberately different from "the first one failed": a plant alert that
+     * stops at a transport having a bad afternoon is the one message you
+     * cannot afford to lose.
+     *
+     * @param string|null $png a chart to attach, if the channel can carry one
+     * @return array{ok:bool,status:int,body:string,transport:string,tried:array<int,string>}
+     */
+    public static function deliver(array $user, string $text, ?string $png = null): array
+    {
+        $channels = Channel::forUser((int)$user['id']);
+        $tried    = [];
+        $last     = ['ok' => false, 'status' => 0, 'body' => 'no channel configured'];
+
+        foreach ($channels as $channel) {
+            $name      = (string)$channel['transport'];
+            $transport = self::via($name);
+            $address   = (string)$channel['address'];
+
+            if ($transport === null) {
+                $tried[] = "{$name}: unknown transport";
+                continue;
+            }
+            if (!$transport->isConfigured()) {
+                $tried[] = "{$name}: not configured";
+                continue;
+            }
+
+            $last = $png === null || $png === ''
+                ? $transport->sendNotification($address, $text)
+                : $transport->sendImage($address, $png, $text);
+
+            if ($last['ok']) {
+                return $last + ['transport' => $name, 'tried' => $tried];
+            }
+
+            $tried[] = "{$name}: HTTP {$last['status']} {$last['body']}";
+        }
+
+        return $last + ['transport' => '', 'tried' => $tried];
     }
 
     /** Only used by tests, which switch transports between cases. */

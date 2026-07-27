@@ -40,6 +40,7 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/app/bootstrap.php';
 
 use PV\Auth;
+use PV\Channel;
 use PV\Data;
 use PV\Db;
 use PV\Messages;
@@ -60,24 +61,64 @@ function ensureSchema(): void
     }
 }
 
-/** How a user is displayed: their address, their phone number, or neither yet. */
+/**
+ * How a user is displayed: where they are reached, best channel first.
+ *
+ * A pending invite says so rather than showing nothing, which read as a
+ * broken record rather than one still waiting to be opened.
+ */
 function contactOf(array $user): string
 {
-    $address = trim((string)($user['address'] ?? ''));
-    if ($address !== '') {
-        return $address;
+    $channels = Channel::forUser((int)$user['id']);
+    if ($channels !== []) {
+        $parts = [];
+        foreach ($channels as $channel) {
+            $parts[] = $channel['transport'] . ' ' . $channel['address'];
+        }
+
+        return implode(' → ', $parts);
     }
 
-    $phone = trim((string)($user['phone'] ?? ''));
-    if ($phone !== '') {
-        return '+' . $phone;
-    }
-
-    // An invited account that has not been opened yet. Showing a bare '+'
-    // here read as a broken record rather than one still waiting.
-    return trim((string)($user['invite_code'] ?? '')) !== ''
+    return Channel::forUser((int)$user['id'], false) !== []
         ? '(invite pending)'
-        : '(no contact)';
+        : '(no channel)';
+}
+
+/** Everything a user can be reached on, including invites not yet opened. */
+function runChannels(string $who): int
+{
+    if (!Db::isInstalled()) {
+        fail('Schema is missing. Run: php setup.php init');
+    }
+
+    $users = $who === '' ? Auth::activeUsers() : array_filter(
+        Auth::activeUsers(),
+        static fn($u) => (string)$u['id'] === $who || strcasecmp($u['name'], $who) === 0
+    );
+
+    if ($users === []) {
+        fail($who === '' ? 'No users yet.' : "No user matches '{$who}'.");
+    }
+
+    printf("%-4s %-20s %-4s %-10s %-24s %s\n", 'ID', 'USER', 'PRIO', 'TRANSPORT', 'ADDRESS', 'STATE');
+    foreach ($users as $user) {
+        foreach (Channel::forUser((int)$user['id'], false) as $channel) {
+            printf(
+                "%-4s %-20s %-4s %-10s %-24s %s\n",
+                $channel['id'],
+                mb_substr((string)$user['name'], 0, 20),
+                $channel['priority'],
+                $channel['transport'],
+                (string)($channel['address'] ?? '') === '' ? '-' : $channel['address'],
+                $channel['verified_at'] !== null ? 'active' : 'invite pending'
+            );
+        }
+    }
+
+    echo "\nLower priority is tried first; delivery stops at the first channel that works.\n";
+    echo "Reorder with: php setup.php channel-priority <channel id> <number>\n";
+
+    return 0;
 }
 
 /**
@@ -130,6 +171,9 @@ function usage(): void
 
     {$adding}
       php setup.php list                       list users
+      php setup.php channels [name|id]         list where users are reached
+      php setup.php channel-priority <id> <n>  reorder a channel (lower goes first)
+      php setup.php channel-remove <id>        drop one way of reaching someone
       php setup.php remove <contact>           delete a user
       php setup.php check                      verify the whole deployment
       php setup.php test <contact> [text]      send one message and show the result
@@ -246,6 +290,9 @@ function runInvite(string $name, bool $forceNew = false): int
 
     ensureSchema();
 
+    // The invite opens a channel on whatever this installation sends over.
+    $transport = Messenger::name();
+
     // Inviting somebody who is already on the list means "send them another
     // link", not "create a second account for the same person". Getting this
     // wrong is quiet and expensive: the duplicate looks fine in `list`, and
@@ -259,7 +306,11 @@ function runInvite(string $name, bool $forceNew = false): int
         // bound to a chat is the one case where there is nothing to do.
         $user = $existing[0];
         foreach ($existing as $candidate) {
-            if (trim((string)($candidate['address'] ?? '')) === '') {
+            $reachable = false;
+            foreach (Channel::forUser((int)$candidate['id']) as $channel) {
+                $reachable = $reachable || $channel['transport'] === $transport;
+            }
+            if (!$reachable) {
                 $user = $candidate;
                 break;
             }
@@ -270,10 +321,16 @@ function runInvite(string $name, bool $forceNew = false): int
             echo "      Run 'php setup.php list' to see them, and 'remove' to clear out any spares.\n\n";
         }
 
-        $address = trim((string)($user['address'] ?? ''));
+        $address = '';
+        foreach (Channel::forUser((int)$user['id']) as $channel) {
+            if ($channel['transport'] === $transport) {
+                $address = (string)$channel['address'];
+                break;
+            }
+        }
 
         if ($address !== '') {
-            echo "{$user['name']} (id {$user['id']}) is already activated on chat {$address}.\n\n";
+            echo "{$user['name']} (id {$user['id']}) is already activated on {$transport} {$address}.\n\n";
             echo "Nothing to do - they can message the bot right now. To move them to a\n";
             echo "different chat, remove and re-invite:\n\n";
             echo "  php setup.php remove {$address}\n";
@@ -283,7 +340,7 @@ function runInvite(string $name, bool $forceNew = false): int
             return 1;
         }
 
-        $code = Auth::reissueInvite((int)$user['id']);
+        $code = Auth::reissueInvite((int)$user['id'], $transport);
 
         echo "Re-issued the invite for {$user['name']} (id {$user['id']}), still awaiting activation.\n";
         echo "Any earlier link for them has stopped working.\n\n";
@@ -292,7 +349,7 @@ function runInvite(string $name, bool $forceNew = false): int
         return 0;
     }
 
-    [$user, $code] = Auth::createInvite($name);
+    [$user, $code] = Auth::createInvite($name, $transport);
 
     echo "Created {$user['name']} (id {$user['id']}), awaiting activation.\n\n";
     echo "  " . PV\Transport\Telegram::inviteLink($code) . "\n\n";
@@ -575,9 +632,26 @@ function runCheck(): int
             ? $bad('TELEGRAM_WEBHOOK_SECRET', 'not set - the webhook refuses every delivery')
             : $ok('webhook URL', PV\Router::url('telegram-webhook'));
 
-        $pending = Db::conn()->query('SELECT COUNT(*) FROM users WHERE invite_code IS NOT NULL')->fetchColumn();
+        $pending = Db::conn()->query(
+            'SELECT COUNT(*) FROM notification_channels WHERE invite_code IS NOT NULL'
+        )->fetchColumn();
         if ((int)$pending > 0) {
-            $warn('invites', $pending . ' user(s) have not opened their invite link yet');
+            $warn('invites', $pending . ' invite link(s) have not been opened yet');
+        }
+    }
+
+    // An account with nowhere to send is silently skipped by the job, which is
+    // the correct behaviour and completely invisible - so say it here.
+    if (Db::isInstalled() && Db::isCurrent()) {
+        $unreachable = Db::conn()->query(
+            "SELECT COUNT(*) FROM users u WHERE u.is_active = 1 AND NOT EXISTS (
+                 SELECT 1 FROM notification_channels c
+                 WHERE c.user_id = u.id AND c.address IS NOT NULL AND c.address <> ''
+             )"
+        )->fetchColumn();
+        if ((int)$unreachable > 0) {
+            $warn('channels', $unreachable . ' user(s) have no way to be reached'
+                . ' - see: php setup.php channels');
         }
     }
 
@@ -689,6 +763,26 @@ switch ($command) {
             : "Schema updated:\n  " . implode("\n  ", $applied) . "\n";
         break;
 
+    case 'channels':
+        exit(runChannels($argv[2] ?? ''));
+
+    case 'channel-priority':
+        if (!isset($argv[2], $argv[3]) || !ctype_digit($argv[2])) {
+            fail('Usage: php setup.php channel-priority <channel id> <number>');
+        }
+        Channel::setPriority((int)$argv[2], (int)$argv[3]);
+        echo "Channel {$argv[2]} now has priority {$argv[3]} (lower is tried first).\n";
+        break;
+
+    case 'channel-remove':
+        if (!isset($argv[2]) || !ctype_digit($argv[2])) {
+            fail('Usage: php setup.php channel-remove <channel id>');
+        }
+        echo Channel::remove((int)$argv[2])
+            ? "Channel {$argv[2]} removed.\n"
+            : "No channel with id {$argv[2]}.\n";
+        break;
+
     case 'list':
         if (!Db::isInstalled()) {
             fail("Schema is missing. Run: php setup.php init");
@@ -759,7 +853,7 @@ switch ($command) {
         }
 
         try {
-            $user = Auth::addUser($name, $phone, $kind === 'chat_id' ? 'address' : 'auto');
+            $user = Auth::addUser($name, Messenger::name(), $phone);
         } catch (Throwable $e) {
             fail($e->getMessage());
         }

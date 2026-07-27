@@ -58,48 +58,44 @@ final class Auth
     }
 
     /**
-     * Register a user.
+     * Register a user whose address is already known, and open their first
+     * channel on it.
      *
-     * $contact is a phone number, or an address for transports that do not use
-     * phone numbers (an email, for instance). Which one it is is decided by
-     * whether it looks like an address rather than by configuration, so a
-     * single account list can serve more than one transport.
+     * The transport is named by the caller rather than guessed from the shape
+     * of the address: the same digits are a chat id to one transport and a
+     * phone number to another, and guessing wrong stores an account that
+     * nothing can ever reach.
      */
-    /**
-     * @param string $kind 'auto' guesses from the contact; 'address' forces it
-     *                     to be stored as an address, which is what transports
-     *                     that identify people by chat id need - a bare number
-     *                     is a chat id there, not a phone number.
-     */
-    public static function addUser(string $name, string $contact, string $kind = 'auto'): array
+    public static function addUser(string $name, string $transport, string $address): array
     {
-        $isAddress = $kind === 'address' || str_contains($contact, '@');
+        $address = trim($address);
+        if ($address === '') {
+            throw new \InvalidArgumentException('An address is required');
+        }
 
-        if ($isAddress) {
-            $address = trim($contact);
-            $digits  = null;
-            if (self::userByAddress($address) !== null) {
-                throw new \RuntimeException("A user with address {$address} already exists");
-            }
-        } else {
-            $address = null;
-            $digits  = self::normalizePhone($contact);
-            if ($digits === '' || strlen($digits) < 8) {
-                throw new \InvalidArgumentException("'{$contact}' is not a usable phone number or address");
-            }
-            if (self::userByPhone($digits) !== null) {
-                throw new \RuntimeException("A user with phone +{$digits} already exists");
-            }
+        if (Channel::at($transport, $address) !== null) {
+            throw new \RuntimeException("A user is already reachable at {$transport} {$address}");
         }
 
         $statement = Db::conn()->prepare(
-            'INSERT INTO users (name, phone, address, is_active, created_at) VALUES (?, ?, ?, 1, NOW())'
+            'INSERT INTO users (name, is_active, created_at) VALUES (?, 1, NOW())'
         );
-        $statement->execute([$name, $digits, $address]);
+        $statement->execute([$name]);
 
-        return self::userById((int)Db::conn()->lastInsertId());
+        $user = self::userById((int)Db::conn()->lastInsertId());
+        Channel::add((int)$user['id'], $transport, $address);
+
+        return $user;
     }
 
+    /**
+     * The account reachable at this address, on any transport.
+     *
+     * For operators, who type an address without saying which transport it
+     * belongs to. Anything acting on an inbound message uses
+     * Channel::userAt() instead, which is scoped to the transport it arrived
+     * over - a message only proves who the sender is there.
+     */
     public static function userByAddress(string $address): ?array
     {
         if (trim($address) === '') {
@@ -107,7 +103,10 @@ final class Auth
         }
 
         $statement = Db::conn()->prepare(
-            'SELECT * FROM users WHERE address = ? AND is_active = 1 LIMIT 1'
+            'SELECT u.* FROM users u
+             JOIN notification_channels c ON c.user_id = u.id
+             WHERE c.address = ? AND u.is_active = 1
+             LIMIT 1'
         );
         $statement->execute([trim($address)]);
 
@@ -117,24 +116,24 @@ final class Auth
     /**
      * Create an account whose address is not known yet.
      *
-     * Telegram identifies people by numeric chat id, which nobody can type
-     * from memory. So the account is created empty with a single-use invite
-     * code; the user taps a link carrying it, and their chat id is captured
-     * from the message that arrives.
+     * The addresses worth having cannot be typed from memory - a Telegram chat
+     * id is a number nobody knows. So the account is created with a channel
+     * holding only a single-use invite code; the user taps a link carrying it,
+     * and their address is captured from the message that arrives.
      *
      * @return array{0:array,1:string} the user and the invite code
      */
-    public static function createInvite(string $name): array
+    public static function createInvite(string $name, string $transport): array
     {
-        $code = bin2hex(random_bytes(12));
-
         $statement = Db::conn()->prepare(
-            'INSERT INTO users (name, phone, address, invite_code, is_active, created_at)
-             VALUES (?, NULL, NULL, ?, 1, NOW())'
+            'INSERT INTO users (name, phone, address, is_active, created_at)
+             VALUES (?, NULL, NULL, 1, NOW())'
         );
-        $statement->execute([$name, $code]);
+        $statement->execute([$name]);
 
-        return [self::userById((int)Db::conn()->lastInsertId()), $code];
+        $user = self::userById((int)Db::conn()->lastInsertId());
+
+        return [$user, Channel::invite((int)$user['id'], $transport)];
     }
 
     /**
@@ -164,42 +163,18 @@ final class Auth
      * the wrong person, or into a chat history somebody else can read, is
      * replaced rather than left live alongside its successor.
      */
-    public static function reissueInvite(int $userId): string
+    public static function reissueInvite(int $userId, string $transport): string
     {
-        $code = bin2hex(random_bytes(12));
-
-        $statement = Db::conn()->prepare('UPDATE users SET invite_code = ? WHERE id = ?');
-        $statement->execute([$code, $userId]);
-
-        return $code;
+        return Channel::invite($userId, $transport);
     }
 
     /**
      * Redeem an invite code by binding the address that presented it.
-     * The code is cleared, so a forwarded link cannot claim the account twice.
+     * The code is cleared, so a forwarded link cannot claim the channel twice.
      */
-    public static function bindInvite(string $code, string $address): ?array
+    public static function bindInvite(string $code, string $transport, string $address): ?array
     {
-        $code    = trim($code);
-        $address = trim($address);
-        if ($code === '' || $address === '') {
-            return null;
-        }
-
-        $statement = Db::conn()->prepare(
-            'SELECT * FROM users WHERE invite_code = ? AND is_active = 1 LIMIT 1'
-        );
-        $statement->execute([$code]);
-        $user = $statement->fetch();
-
-        if ($user === false) {
-            return null;
-        }
-
-        $update = Db::conn()->prepare('UPDATE users SET address = ?, invite_code = NULL WHERE id = ?');
-        $update->execute([$address, $user['id']]);
-
-        return self::userById((int)$user['id']);
+        return Channel::redeem($code, $transport, $address);
     }
 
     /**
@@ -278,18 +253,22 @@ final class Auth
         return self::userById($userId);
     }
 
-    /** Accepts either a phone number or an address. */
+    /**
+     * Delete the account reachable at this contact, and everything hanging
+     * off it - channels and login tokens go with it, by foreign key.
+     *
+     * Accepts a channel address, or a phone number from the columns that
+     * predate channels.
+     */
     public static function removeUser(string $contact): bool
     {
-        $digits  = self::normalizePhone($contact);
-        $address = trim($contact);
+        $user = self::userByAddress($contact) ?? self::userByPhone($contact);
+        if ($user === null) {
+            return false;
+        }
 
-        // NULL-safe, and never matches on an empty value.
-        $statement = Db::conn()->prepare(
-            'DELETE FROM users
-             WHERE (? <> \'\' AND phone = ?) OR (? <> \'\' AND address = ?)'
-        );
-        $statement->execute([$digits, $digits, $address, $address]);
+        $statement = Db::conn()->prepare('DELETE FROM users WHERE id = ?');
+        $statement->execute([$user['id']]);
 
         return $statement->rowCount() > 0;
     }
