@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace PV\Controller;
 
 use PV\Auth;
+use PV\ErrorPage;
 use PV\Router;
 
 /**
@@ -20,6 +21,18 @@ final class Settings implements Handler
         $user = Auth::user();
         if ($user === null) {
             return; // Router only reaches us with a session
+        }
+
+        // A missing column reads as its default, so an un-upgraded database
+        // renders a form that looks perfectly normal and then fails on save.
+        // Say so up front instead of handing over a form that cannot work.
+        $pending = ErrorPage::pendingSchema();
+        if ($pending !== []) {
+            http_response_code(503);
+            header('Content-Type: text/html; charset=utf-8');
+            $detail = '';
+            require dirname(__DIR__, 2) . '/views/error.php';
+            return;
         }
 
         $saved = false;

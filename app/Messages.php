@@ -268,6 +268,33 @@ final class Messages
              . 'und kann nur einmal verwendet werden.';
     }
 
+    /** Fits in a callback toast, which Telegram keeps short. */
+    public static function failedShort(): string
+    {
+        return 'Das hat nicht geklappt.';
+    }
+
+    /**
+     * Sent when something threw.
+     *
+     * The stale-schema case is named because it is the one the reader can act
+     * on - the operator of a household plant is usually one of the five people
+     * in the chat, and it costs them a single command.
+     */
+    public static function failed(bool $schemaIsStale): string
+    {
+        if ($schemaIsStale) {
+            return implode("\n", [
+                '⚠️ Die Datenbank ist nicht auf dem aktuellen Stand.',
+                '',
+                'Auf dem Server einmal ausführen:',
+                '   php setup.php init',
+            ]);
+        }
+
+        return '⚠️ Das hat nicht geklappt. Die Einzelheiten stehen im Fehlerprotokoll des Servers.';
+    }
+
     public static function portalLink(string $url, int $ttlMinutes): string
     {
         return "🔑 Dein Zugang zum Portal:\n{$url}\n\n"

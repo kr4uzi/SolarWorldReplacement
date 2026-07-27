@@ -42,9 +42,10 @@ pv/
 │   ├── Messages.php    # German user-facing text
 │   ├── Messenger.php   # Resolves the configured transport
 │   ├── HttpClient.php  # cURL with a stream fallback
+│   ├── ErrorPage.php   # What a failed request shows instead of a bare 500
 │   ├── Controller/     # Dashboard, Api, Login, Settings, webhooks
 │   └── Transport/      # Telegram, WhatsApp, Birdy, Http, LogFile
-├── views/              # dashboard.php, settings.php, login.php, denied.php
+├── views/              # dashboard.php, settings.php, login.php, denied.php, error.php
 └── data/               # Logger uploads (FTP target)
 ```
 
@@ -89,9 +90,14 @@ way; a failed greeting is reported, never fatal. Pass `--no-message` to skip
 it, and it is skipped automatically while the transport is still unconfigured.
 
 After pulling a new version, run `php setup.php init` - it applies whatever
-columns that version added and leaves existing rows untouched. `check` reports
-an out-of-date schema, and `job.php` refuses to run against one rather than
-failing mid-send. The commands that create users apply pending changes
+columns that version added and leaves existing rows untouched. Forgetting it
+is the commonest way to break a working install, and it fails in a misleading
+way: a missing column reads as its default, so every page still renders and
+only the first *write* fails. The portal now says so - a stale schema names the
+missing columns and the command to run, rather than answering with an empty
+500 - and the bot answers a failed tap the same way instead of going quiet.
+`check` reports an out-of-date schema, and `job.php` refuses to run against one
+rather than failing mid-send. The commands that create users apply pending changes
 themselves, so a fresh install is still a single command.
 
 `check` is the fastest way to find out what is still missing. It reports on the

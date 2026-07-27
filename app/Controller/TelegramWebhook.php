@@ -6,6 +6,7 @@ namespace PV\Controller;
 use PV\Auth;
 use PV\Chart;
 use PV\Env;
+use PV\ErrorPage;
 use PV\Messages;
 use PV\Messenger;
 use PV\Router;
@@ -67,6 +68,44 @@ final class TelegramWebhook implements Handler
         } catch (\Throwable $e) {
             $this->log(sprintf('ERROR %s: %s (%s:%d)',
                 get_class($e), $e->getMessage(), basename($e->getFile()), $e->getLine()));
+
+            // Silence here is indistinguishable from a dead webhook, and the
+            // user has no way to tell which they are looking at. Say that it
+            // failed - and when the cause is a database that was never
+            // upgraded, say that too, since it is one command to fix.
+            $this->apologise($update);
+        }
+    }
+
+    /**
+     * Tell the chat that the request failed.
+     *
+     * Best-effort by nature: this runs because something already threw, so it
+     * must not throw in turn - the response has long since been sent and a
+     * second failure would go nowhere at all.
+     */
+    private function apologise(array $update): void
+    {
+        try {
+            $chatId = (string)($update['message']['chat']['id']
+                ?? $update['callback_query']['message']['chat']['id']
+                ?? $update['callback_query']['from']['id'] ?? '');
+            if ($chatId === '') {
+                return;
+            }
+
+            // Stop the button's spinner first, if a button is what failed.
+            $callbackId = (string)($update['callback_query']['id'] ?? '');
+            if ($callbackId !== '') {
+                Telegram::acknowledgeCallback($callbackId, Messages::failedShort());
+            }
+
+            Telegram::call('sendMessage', [
+                'chat_id' => $chatId,
+                'text'    => Messages::failed(ErrorPage::schemaIsStale()),
+            ]);
+        } catch (\Throwable $inner) {
+            $this->log('ERROR while reporting the failure: ' . $inner->getMessage());
         }
     }
 

@@ -190,7 +190,11 @@ final class Auth
 
     public static function saveSettings(int $userId, bool $zero, bool $daily, bool $monthly, string $time): void
     {
-        $time = preg_match('/^(\d{1,2}):(\d{2})$/', trim($time), $m) === 1
+        // Seconds are optional: <input type="time"> posts 'HH:MM' in most
+        // browsers but 'HH:MM:SS' in some, and rejecting the longer form threw
+        // the chosen time away and silently fell back to JOB_TRIGGER_TIME -
+        // which reads as "it did not save" with nothing to show why.
+        $time = preg_match('/^(\d{1,2}):(\d{2})(?::\d{2})?$/', trim($time), $m) === 1
             ? sprintf('%02d:%02d:00', min(23, (int)$m[1]), min(59, (int)$m[2]))
             : null;
 

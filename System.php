@@ -15,4 +15,12 @@ declare(strict_types=1);
 
 require __DIR__ . '/app/bootstrap.php';
 
-PV\Router::dispatch();
+// Nothing below this is allowed to reach the visitor as a bare 500. An empty
+// error page cannot be told apart from a broken link, and the commonest cause
+// - a schema that was never upgraded after a pull - is both invisible and
+// trivially fixable, so it is worth naming rather than logging silently.
+try {
+    PV\Router::dispatch();
+} catch (Throwable $e) {
+    PV\ErrorPage::render($e);
+}
