@@ -5,8 +5,9 @@ declare(strict_types=1);
  * Account management. CLI only.
  *
  *   php setup.php init                      create or update the database schema
- *   php setup.php "Markus" +4915112345678   add a user (schema is created if needed)
- *   php setup.php add "Markus" +49151...    same thing, explicit
+ *   php setup.php invite "Markus"           create a user and print their invite link
+ *   php setup.php "Markus" +4915112345678   add a user directly, where the transport
+ *                                           addresses people by phone number
  *   php setup.php list                      show all accounts
  *   php setup.php remove +49151...          delete an account and its tokens
  *   php setup.php check                     verify the whole deployment
@@ -17,8 +18,11 @@ declare(strict_types=1);
  * Pass --no-message to skip it; it is skipped automatically while that
  * transport is unconfigured.
  *
- * A contact is a phone number, or an address (anything containing @) for
- * transports that do not use phone numbers.
+ * A contact is a phone number, or an address for transports that do not use
+ * phone numbers - an email, or a numeric chat id. Which one applies is decided
+ * by the configured transport, not guessed from what was typed: on Telegram a
+ * phone number identifies nobody, so it is refused rather than stored in an
+ * account that could never be reached.
  *
  * A user record is the only thing that grants access: the same row decides
  * who the bot answers and who can hold a portal session. There is no
@@ -56,12 +60,40 @@ function ensureSchema(): void
     }
 }
 
-/** How a user is displayed: their address, or their phone number. */
+/** How a user is displayed: their address, their phone number, or neither yet. */
 function contactOf(array $user): string
 {
     $address = trim((string)($user['address'] ?? ''));
+    if ($address !== '') {
+        return $address;
+    }
 
-    return $address !== '' ? $address : '+' . $user['phone'];
+    $phone = trim((string)($user['phone'] ?? ''));
+    if ($phone !== '') {
+        return '+' . $phone;
+    }
+
+    // An invited account that has not been opened yet. Showing a bare '+'
+    // here read as a broken record rather than one still waiting.
+    return trim((string)($user['invite_code'] ?? '')) !== ''
+        ? '(invite pending)'
+        : '(no contact)';
+}
+
+/**
+ * How the configured transport addresses people: 'phone', 'chat_id', 'any'.
+ *
+ * Answers 'any' when the transport cannot be resolved at all - an unconfigured
+ * installation should still be able to add users, and 'check' is the command
+ * that complains about configuration.
+ */
+function addressKind(): string
+{
+    try {
+        return PV\Messenger::transport()->addressKind();
+    } catch (Throwable) {
+        return 'any';
+    }
 }
 
 /** @return never */
@@ -73,12 +105,30 @@ function fail(string $message, int $code = 1)
 
 function usage(): void
 {
+    // The way to add a user depends on the transport, so lead with whichever
+    // one actually works here. Telling somebody to type a phone number into a
+    // Telegram installation produces an account that can never be reached.
+    $adding = addressKind() === 'chat_id'
+        ? <<<TXT
+        Adding users (this installation uses chat ids):
+          php setup.php invite <name>              create a user and print their invite link
+                        [--new]                    ... even if that name already exists
+          php setup.php add <name> <chat id>       bind an account to a chat id directly
+
+        TXT
+        : <<<TXT
+        Adding users:
+          php setup.php <name> <contact>           add a user (sends a welcome message)
+          php setup.php add <name> <contact>       add a user
+                        [--no-message]             ... without the welcome message
+
+        TXT;
+
     echo <<<TXT
     Usage:
       php setup.php init                       create the database schema
-      php setup.php <name> <contact>           add a user (sends a welcome message)
-      php setup.php add <name> <contact>       add a user
-                    [--no-message]             ... without the welcome message
+
+    {$adding}
       php setup.php list                       list users
       php setup.php remove <contact>           delete a user
       php setup.php check                      verify the whole deployment
@@ -86,7 +136,6 @@ function usage(): void
       php setup.php login <name|id|contact>    mint a portal link on the terminal
 
     Telegram:
-      php setup.php invite <name>              create a user and print their invite link
       php setup.php telegram-webhook           register this site's webhook with Telegram
       php setup.php telegram-status            ask Telegram what it thinks the webhook is
 
@@ -189,13 +238,59 @@ function runLogin(string $who): int
  * type. So the account is created empty and the user's first message - sent by
  * tapping this link - is what supplies it.
  */
-function runInvite(string $name): int
+function runInvite(string $name, bool $forceNew = false): int
 {
     if ($name === '') {
-        fail('Usage: php setup.php invite <name>');
+        fail('Usage: php setup.php invite <name> [--new]');
     }
 
     ensureSchema();
+
+    // Inviting somebody who is already on the list means "send them another
+    // link", not "create a second account for the same person". Getting this
+    // wrong is quiet and expensive: the duplicate looks fine in `list`, and
+    // whichever row does not end up bound to a chat simply never hears
+    // anything, with nothing to show why.
+    $existing = $forceNew ? [] : Auth::usersByName($name);
+
+    if ($existing !== []) {
+        // Among duplicates, prefer one that is still waiting to be activated:
+        // inviting is about getting somebody connected, and an account already
+        // bound to a chat is the one case where there is nothing to do.
+        $user = $existing[0];
+        foreach ($existing as $candidate) {
+            if (trim((string)($candidate['address'] ?? '')) === '') {
+                $user = $candidate;
+                break;
+            }
+        }
+
+        if (count($existing) > 1) {
+            echo "Note: " . count($existing) . " accounts are named {$name}. Using id {$user['id']}.\n";
+            echo "      Run 'php setup.php list' to see them, and 'remove' to clear out any spares.\n\n";
+        }
+
+        $address = trim((string)($user['address'] ?? ''));
+
+        if ($address !== '') {
+            echo "{$user['name']} (id {$user['id']}) is already activated on chat {$address}.\n\n";
+            echo "Nothing to do - they can message the bot right now. To move them to a\n";
+            echo "different chat, remove and re-invite:\n\n";
+            echo "  php setup.php remove {$address}\n";
+            echo "  php setup.php invite \"{$user['name']}\"\n\n";
+            echo "To add a second, different person of the same name: php setup.php invite \"{$name}\" --new\n";
+
+            return 1;
+        }
+
+        $code = Auth::reissueInvite((int)$user['id']);
+
+        echo "Re-issued the invite for {$user['name']} (id {$user['id']}), still awaiting activation.\n";
+        echo "Any earlier link for them has stopped working.\n\n";
+        echo "  " . PV\Transport\Telegram::inviteLink($code) . "\n";
+
+        return 0;
+    }
 
     [$user, $code] = Auth::createInvite($name);
 
@@ -557,7 +652,7 @@ if ($command === 'login') {
 }
 
 if ($command === 'invite') {
-    exit(runInvite($argv[2] ?? ''));
+    exit(runInvite($argv[2] ?? '', in_array('--new', $argv, true)));
 }
 
 if ($command === 'telegram-webhook') {
@@ -600,7 +695,9 @@ switch ($command) {
         }
         $users = Auth::activeUsers();
         if ($users === []) {
-            echo "No users yet. Add one: php setup.php \"Name\" +49151...\n";
+            echo addressKind() === 'chat_id'
+                ? "No users yet. Add one: php setup.php invite \"Name\"\n"
+                : "No users yet. Add one: php setup.php \"Name\" +49151...\n";
             break;
         }
         printf("%-4s %-24s %-26s %s\n", 'ID', 'NAME', 'CONTACT', 'CREATED');
@@ -635,8 +732,34 @@ switch ($command) {
         // is one command, and an upgraded one does not need a separate step.
         ensureSchema();
 
+        // Under a transport that identifies people by chat id, a phone number
+        // creates an account nothing can ever reach: the bot matches incoming
+        // chats by id, so that row is never bound, never answered, and the job
+        // keeps trying to send to a number that is not an address. Refuse it
+        // and name the command that does work.
+        $kind = addressKind();
+        if ($kind === 'chat_id') {
+            if (preg_match('/^-?\d+$/', $phone) !== 1) {
+                fail(
+                    "This installation talks to people over " . PV\Messenger::name() . ", which identifies\n"
+                    . "them by numeric chat id - '{$phone}' cannot be reached and the account would\n"
+                    . "never receive anything.\n\n"
+                    . "Invite them instead, which creates the account and the link that binds it:\n\n"
+                    . "  php setup.php invite \"{$name}\"\n\n"
+                    . "A bare chat id is still accepted here, for the case where somebody has\n"
+                    . "already messaged the bot and it told them their id."
+                );
+            }
+        }
+
+        if ($existing = Auth::usersByName($name)) {
+            echo "Note: an account named {$name} already exists (id {$existing[0]['id']}).\n";
+            echo "      Adding another one. To send that person a new link instead:"
+                . " php setup.php invite \"{$name}\"\n\n";
+        }
+
         try {
-            $user = Auth::addUser($name, $phone);
+            $user = Auth::addUser($name, $phone, $kind === 'chat_id' ? 'address' : 'auto');
         } catch (Throwable $e) {
             fail($e->getMessage());
         }

@@ -76,11 +76,24 @@ the same row decides both who the bot answers and who can open the portal.
 
 ```bash
 php setup.php init                        # create or update the schema
-php setup.php "Markus" +4915112345678     # add a user
+php setup.php invite "Markus"             # add a user, print their invite link
 php setup.php list
-php setup.php remove +4915112345678
+php setup.php remove 4242                 # by chat id, phone number or address
 php setup.php check                       # verify the whole deployment
 ```
+
+How a user is added depends on the transport, and `setup.php` refuses the
+combinations that cannot work. Telegram identifies people by numeric chat id,
+which nobody can look up or type, so an account is created empty and the user's
+first message - sent by tapping their invite link - supplies it. Handing that
+installation a phone number used to create an account silently: it looked
+correct in `list` and was never reachable by anything. It is now refused, with
+the command that does work.
+
+Inviting somebody who is already on the list re-issues their link on the same
+record rather than creating a second account beside it, and prefers an account
+still waiting to be activated when several share a name. `--new` overrides that
+for two genuinely different people called the same thing.
 
 Adding a user sends them a welcome message introducing the menu. On WhatsApp it is
 a template message - a new user has never written to us, so there is no open

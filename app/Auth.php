@@ -65,9 +65,15 @@ final class Auth
      * whether it looks like an address rather than by configuration, so a
      * single account list can serve more than one transport.
      */
-    public static function addUser(string $name, string $contact): array
+    /**
+     * @param string $kind 'auto' guesses from the contact; 'address' forces it
+     *                     to be stored as an address, which is what transports
+     *                     that identify people by chat id need - a bare number
+     *                     is a chat id there, not a phone number.
+     */
+    public static function addUser(string $name, string $contact, string $kind = 'auto'): array
     {
-        $isAddress = str_contains($contact, '@');
+        $isAddress = $kind === 'address' || str_contains($contact, '@');
 
         if ($isAddress) {
             $address = trim($contact);
@@ -129,6 +135,43 @@ final class Auth
         $statement->execute([$name, $code]);
 
         return [self::userById((int)Db::conn()->lastInsertId()), $code];
+    }
+
+    /**
+     * Accounts carrying this name.
+     *
+     * Names are not unique - two people in one household can share one - so
+     * this returns all of them and lets the caller decide. It exists so that
+     * inviting somebody twice reaches for the account that already exists
+     * rather than quietly creating a second one beside it.
+     *
+     * @return array<int,array>
+     */
+    public static function usersByName(string $name): array
+    {
+        $statement = Db::conn()->prepare(
+            'SELECT * FROM users WHERE name = ? AND is_active = 1 ORDER BY id'
+        );
+        $statement->execute([trim($name)]);
+
+        return $statement->fetchAll();
+    }
+
+    /**
+     * Issue a fresh invite code for an account that already exists.
+     *
+     * Any previous code stops working, which is the point: a link that went to
+     * the wrong person, or into a chat history somebody else can read, is
+     * replaced rather than left live alongside its successor.
+     */
+    public static function reissueInvite(int $userId): string
+    {
+        $code = bin2hex(random_bytes(12));
+
+        $statement = Db::conn()->prepare('UPDATE users SET invite_code = ? WHERE id = ?');
+        $statement->execute([$code, $userId]);
+
+        return $code;
     }
 
     /**
