@@ -1,7 +1,20 @@
 # Everything goes through the front controller, which is where authentication
 # is decided. Nothing else at the web root should be reachable directly.
 
+# The rewrite below cannot handle a request for a directory - "/" included,
+# since %{REQUEST_FILENAME} then names a directory that exists and the !-d
+# condition skips the rule. Without an index file Apache answers its own 403,
+# so the dashboard is unreachable while every other route works. Naming the
+# front controller as the index is what makes "/" resolve.
+DirectoryIndex System.php
+
 RewriteEngine On
+
+# The logger's upload directory holds production data, the job's state and,
+# with the log transport, message contents. It cannot carry its own .htaccess
+# because the directory is gitignored, so deny it here - the pattern is
+# relative to this file, so it holds in a subdirectory install too.
+RewriteRule ^(data|backup)/ - [F,L]
 
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME} !-f

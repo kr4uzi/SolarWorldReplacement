@@ -498,6 +498,12 @@ controller as the router, so the same URLs work without Apache.
 **Issue**: Every URL 404s, or the dashboard loads but `/api` does not
 - **Solution**: `mod_rewrite` is off or `AllowOverride` forbids the `.htaccess`.
 
+**Issue**: Every route works except `/`, which returns Apache's own 403
+- **Solution**: `DirectoryIndex System.php` is missing from `.htaccess`. The
+  rewrite skips requests for a directory, so `/` never reaches the front
+  controller and Apache answers instead - which looks exactly like being
+  refused after logging in, since that is where login redirects to.
+
 **Issue**: The login link does not work, or the dashboard refuses you after it
 - **Solution**: Set `WEBHOOK_DIAG_KEY` and probe the two routes separately -
   they fail for unrelated reasons that produce the same page. The wording on
