@@ -498,6 +498,23 @@ controller as the router, so the same URLs work without Apache.
 **Issue**: Every URL 404s, or the dashboard loads but `/api` does not
 - **Solution**: `mod_rewrite` is off or `AllowOverride` forbids the `.htaccess`.
 
+**Issue**: The login link does not work, or the dashboard refuses you after it
+- **Solution**: Set `WEBHOOK_DIAG_KEY` and probe the two routes separately -
+  they fail for unrelated reasons that produce the same page. The wording on
+  that page tells them apart: *"Dieser Link ist abgelaufen..."* is the login
+  route, *"Für den Zugang brauchst du einen Anmeldelink"* is the dashboard
+  refusing a session.
+
+  ```bash
+  curl "https://example.com/pv/login?t=THE_TOKEN&diag=THE_KEY"   # token state
+  curl "https://example.com/pv/?diag=THE_KEY"                    # session state
+  ```
+
+  The first reports whether the token arrived, exists, and is still valid -
+  including `expires_at` against `server_time`, which exposes a database and
+  PHP disagreeing about the clock. The second reports whether a cookie arrived
+  and whether PHP can write its session files.
+
 **Issue**: The login link works, but the dashboard then says "Kein Zugriff"
 - **Solution**: The session cookie is not reaching the dashboard. Probe it with
   `WEBHOOK_DIAG_KEY` set: `curl "https://example.com/pv/?diag=THE_KEY"` reports

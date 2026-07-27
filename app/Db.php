@@ -47,7 +47,15 @@ final class Db
         // on the server's clock (commonly UTC) while PHP reads the value back in
         // PV_TIMEZONE - which silently expires every login token the moment it
         // is issued, and misdates every row besides.
-        $pdo->prepare('SET time_zone = ?')->execute([date('P')]);
+        //
+        // Not a prepared statement: MySQL does not accept a placeholder for a
+        // system variable, so binding it here would fail on exactly the servers
+        // this is meant to protect. date('P') yields a fixed +HH:MM, and the
+        // pattern below refuses anything else, so there is nothing to inject.
+        $offset = date('P');
+        if (preg_match('/^[+-]\d{2}:\d{2}$/', $offset) === 1) {
+            $pdo->exec("SET time_zone = '{$offset}'");
+        }
 
         return self::$pdo = $pdo;
     }
