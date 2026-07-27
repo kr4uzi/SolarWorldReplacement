@@ -89,6 +89,22 @@ final class Messenger
         return self::transport()->sendMenu($address);
     }
 
+    /**
+     * Send a chart with its figures as the caption.
+     *
+     * A null image means there was none to draw - GD missing, or no data for
+     * the period - and the text goes out on its own, so callers can always
+     * ask for the picture without checking first.
+     *
+     * @return array{ok:bool,status:int,body:string}
+     */
+    public static function image(string $address, ?string $png, string $caption): array
+    {
+        return $png === null || $png === ''
+            ? self::notify($address, $caption)
+            : self::transport()->sendImage($address, $png, $caption);
+    }
+
     /** Only used by tests, which switch transports between cases. */
     public static function reset(): void
     {

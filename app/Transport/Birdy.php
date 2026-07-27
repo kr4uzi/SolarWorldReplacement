@@ -21,6 +21,8 @@ use PV\HttpClient;
  */
 final class Birdy implements Transport
 {
+    use TextOnly;
+
     public function name(): string
     {
         return 'birdy';

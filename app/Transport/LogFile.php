@@ -52,7 +52,28 @@ final class LogFile implements Transport
 
     public function sendMenu(string $address): array
     {
-        return $this->write('menu', $address, "Menü: Portal · Monatsertrag · Jahresertrag");
+        return $this->write('menu', $address, "Menü: Portal · Woche · Monatsertrag · Jahresertrag");
+    }
+
+    /**
+     * Writes the picture next to the log rather than dropping it.
+     *
+     * The point of this transport is seeing what would have been sent, and
+     * "a chart was attached" is not something you can check by reading.
+     */
+    public function sendImage(string $address, string $png, string $caption): array
+    {
+        $file = dirname($this->path()) . '/message-' . date('Ymd-His') . '-' . substr(md5($png), 0, 6) . '.png';
+        if (!is_dir(dirname($file))) {
+            @mkdir(dirname($file), 0775, true);
+        }
+        $saved = @file_put_contents($file, $png) !== false;
+
+        return $this->write(
+            'image',
+            $address,
+            $caption . "\n\n[" . ($saved ? $file : 'image could not be written') . ']'
+        );
     }
 
     private function write(string $kind, string $address, string $text): array

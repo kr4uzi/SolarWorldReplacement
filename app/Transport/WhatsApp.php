@@ -23,6 +23,8 @@ use PV\Messages;
  */
 final class WhatsApp implements Transport
 {
+    use TextOnly;
+
     public const MENU_PORTAL = 'portal';
     public const MENU_MONTH  = 'month';
     public const MENU_YEAR   = 'year';

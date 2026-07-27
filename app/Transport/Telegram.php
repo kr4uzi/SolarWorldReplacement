@@ -24,6 +24,10 @@ final class Telegram implements Transport
     public const MENU_PORTAL = 'portal';
     public const MENU_MONTH  = 'month';
     public const MENU_YEAR   = 'year';
+    public const MENU_WEEK   = 'week';
+
+    /** Telegram truncates a photo caption past this many characters. */
+    private const CAPTION_LIMIT = 1024;
 
     public function name(): string
     {
@@ -102,12 +106,57 @@ final class Telegram implements Transport
                 'inline_keyboard' => [
                     [['text' => '🔑 Portal', 'callback_data' => self::MENU_PORTAL]],
                     [
+                        ['text' => '📊 7 Tage', 'callback_data' => self::MENU_WEEK],
+                    ],
+                    [
                         ['text' => '📅 Monatsertrag', 'callback_data' => self::MENU_MONTH],
                         ['text' => '📈 Jahresertrag', 'callback_data' => self::MENU_YEAR],
                     ],
                 ],
             ],
         ]);
+    }
+
+    /**
+     * Upload a chart.
+     *
+     * The picture is posted as multipart rather than referenced by URL: the
+     * data would otherwise have to be reachable from the internet, which is
+     * the opposite of what a private plant's figures want, and it would mean
+     * an unauthenticated route serving them.
+     */
+    public function sendImage(string $address, string $png, string $caption): array
+    {
+        $token = self::token();
+        if ($token === '') {
+            return ['ok' => false, 'status' => 0, 'body' => 'TELEGRAM_BOT_TOKEN is not set'];
+        }
+
+        // A caption past the limit is truncated by Telegram, silently losing
+        // the end of the report. Send the picture bare and the text after it.
+        $overlong = mb_strlen($caption) > self::CAPTION_LIMIT;
+
+        [$contentType, $body] = HttpClient::multipart(
+            ['chat_id' => $address] + ($overlong ? [] : ['caption' => $caption]),
+            ['photo' => ['filename' => 'chart.png', 'type' => 'image/png', 'content' => $png]]
+        );
+
+        $base   = rtrim((string)Env::get('TELEGRAM_API_BASE', 'https://api.telegram.org'), '/');
+        $result = HttpClient::request(
+            'POST',
+            "{$base}/bot{$token}/sendPhoto",
+            ['Content-Type: ' . $contentType],
+            $body,
+            max(1, (int)Env::get('TELEGRAM_TIMEOUT', 20))
+        );
+
+        // Fall back to the text when the upload fails, so a picture that will
+        // not go through does not cost the user the report itself.
+        if (!$result['ok']) {
+            return $this->sendReply($address, $caption);
+        }
+
+        return $overlong ? $this->sendReply($address, $caption) : $result;
     }
 
     /** Stops the button's spinner; Telegram expects this for every callback. */

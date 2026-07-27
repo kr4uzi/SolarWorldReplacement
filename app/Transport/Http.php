@@ -20,6 +20,8 @@ use PV\Env;
  */
 final class Http implements Transport
 {
+    use TextOnly;
+
     public function name(): string
     {
         return 'http';

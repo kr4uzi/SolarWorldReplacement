@@ -33,6 +33,7 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/app/bootstrap.php';
 
 use PV\Auth;
+use PV\Chart;
 use PV\Data;
 use PV\Db;
 use PV\Env;
@@ -91,7 +92,7 @@ function markSent(string $key): void
  * The job_runs key carries the user id, so a recipient who could not be
  * reached is retried on the next run without re-sending to everybody else.
  */
-function deliverTo(array $user, string $baseKey, string $message): void
+function deliverTo(array $user, string $baseKey, string $message, ?string $png = null): void
 {
     global $dryRun;
 
@@ -107,11 +108,14 @@ function deliverTo(array $user, string $baseKey, string $message): void
     }
 
     if ($dryRun) {
-        say("[dry-run] would send {$baseKey} to {$address} ({$user['name']})");
+        say("[dry-run] would send {$baseKey} to {$address} ({$user['name']})"
+            . ($png !== null ? ' with a chart (' . strlen($png) . ' bytes)' : ''));
         return;
     }
 
-    $result = Messenger::notify($address, $message);
+    $result = $png === null
+        ? Messenger::notify($address, $message)
+        : Messenger::image($address, $png, $message);
     if ($result['ok']) {
         markSent($key);
         say("sent {$baseKey} to {$address} ({$user['name']})");
@@ -154,6 +158,10 @@ $firstOfLastMonth = strtotime('first day of last month');
 $lastMonth        = (int)date('n', $firstOfLastMonth);
 $lastMonthYear    = (int)date('Y', $firstOfLastMonth);
 
+// The chart that goes with the monthly report is drawn once, not per recipient.
+$monthlyWindow = (int)date('j') <= $catchUpDays;
+$monthChart    = $monthlyWindow ? Chart::month($lastMonth, $lastMonthYear) : null;
+
 $users = Auth::activeUsers();
 if ($users === []) {
     say('No users configured - nothing to send. Add one: php setup.php invite "Name"');
@@ -184,12 +192,14 @@ foreach ($users as $user) {
         deliverTo($user, 'daily-' . $dateKey, Messages::today());
     }
 
-    // 3. The month that just ended.
-    if ($settings['monthly'] && (int)date('j') <= $catchUpDays) {
+    // 3. The month that just ended, with its daily figures as a chart. Both
+    //    are rendered once and reused for every recipient.
+    if ($settings['monthly'] && $monthlyWindow) {
         deliverTo(
             $user,
             sprintf('summary-%04d-%02d', $lastMonthYear, $lastMonth),
-            Messages::monthlySummary($lastMonth, $lastMonthYear)
+            Messages::monthlySummary($lastMonth, $lastMonthYear),
+            $monthChart
         );
     }
 }

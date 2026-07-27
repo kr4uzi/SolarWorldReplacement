@@ -71,6 +71,40 @@ final class HttpClient
     }
 
     /**
+     * Build a multipart/form-data body.
+     *
+     * Needed for file uploads - a picture cannot go in a JSON payload, and
+     * cURL's own @filename handling would mean writing the image to disk first.
+     * Built by hand so the byte string can be posted by either backend.
+     *
+     * @param array<string,string> $fields plain form fields
+     * @param array<string,array{filename:string,type:string,content:string}> $files
+     * @return array{0:string,1:string} content type header value and body
+     */
+    public static function multipart(array $fields, array $files): array
+    {
+        $boundary = '----pv' . bin2hex(random_bytes(16));
+        $body     = '';
+
+        foreach ($fields as $name => $value) {
+            $body .= "--{$boundary}\r\n"
+                . "Content-Disposition: form-data; name=\"{$name}\"\r\n\r\n"
+                . $value . "\r\n";
+        }
+
+        foreach ($files as $name => $file) {
+            $body .= "--{$boundary}\r\n"
+                . "Content-Disposition: form-data; name=\"{$name}\"; filename=\"{$file['filename']}\"\r\n"
+                . "Content-Type: {$file['type']}\r\n\r\n"
+                . $file['content'] . "\r\n";
+        }
+
+        $body .= "--{$boundary}--\r\n";
+
+        return ["multipart/form-data; boundary={$boundary}", $body];
+    }
+
+    /**
      * Read a value out of a decoded payload by dotted path, e.g. 'message.from.id'.
      * Numeric segments index into lists, so 'entry.0.text' works too.
      */

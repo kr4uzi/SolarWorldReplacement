@@ -100,6 +100,7 @@ final class Messages
             self::menuBody(),
             '',
             '  Portal        – Zugang zum Dashboard',
+            '  Woche         – Ertrag der letzten 7 Tage',
             '  Monatsertrag  – Ertrag im laufenden Monat',
             '  Jahresertrag  – Ertrag im laufenden Jahr',
             '',
@@ -142,6 +143,26 @@ final class Messages
         return implode("\n", $lines);
     }
 
+    /** The last n days, as the chart's caption. */
+    public static function lastDays(int $days): string
+    {
+        $sum   = Data::sumLastDays($days);
+        $lines = [
+            '📊 Letzte ' . $days . ' Tage',
+            '   ' . self::energy($sum['total']),
+        ];
+
+        if ($sum['best_day']['date'] !== null) {
+            $lines[] = '';
+            $lines[] = '   Bester Tag: ' . $sum['best_day']['date'] . ' · ' . self::kwh($sum['best_day']['wh']);
+        }
+        if ($sum['zero_days'] > 0) {
+            $lines[] = '   ⚠️ Tage ohne Ertrag: ' . $sum['zero_days'];
+        }
+
+        return implode("\n", $lines);
+    }
+
     public static function currentYear(): string
     {
         $sum   = Data::sumYear((int)date('Y'));
@@ -157,6 +178,34 @@ final class Messages
         }
 
         return implode("\n", $lines);
+    }
+
+    // --- Chart headings -----------------------------------------------------
+    //
+    // The renderer draws boxes and bars; the words live here with the rest of
+    // the German text, so there is still one place to change wording.
+
+    /** @return array{0:string,1:string} title and subtitle */
+    public static function chartDaysHeading(int $days, float $totalWh): array
+    {
+        return ['Letzte ' . $days . ' Tage', 'Gesamt ' . self::energy($totalWh)];
+    }
+
+    /** @return array{0:string,1:string} */
+    public static function chartMonthHeading(int $month, int $year, float $totalWh): array
+    {
+        return [self::monthName($month) . ' ' . $year, 'Tagesertrag · Gesamt ' . self::energy($totalWh)];
+    }
+
+    /** @return array{0:string,1:string} */
+    public static function chartYearHeading(int $year, float $totalWh): array
+    {
+        return ['Jahr ' . $year, 'Monatsertrag · Gesamt ' . self::energy($totalWh)];
+    }
+
+    public static function chartEmpty(): string
+    {
+        return 'Keine Daten';
     }
 
     public static function portalLink(string $url, int $ttlMinutes): string

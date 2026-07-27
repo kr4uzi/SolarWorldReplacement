@@ -247,6 +247,68 @@ final class Data
         ];
     }
 
+    /**
+     * Daily totals across a range, one entry per calendar day.
+     *
+     * Days the logger never wrote come back as zero rather than being left
+     * out. A gap in a chart is indistinguishable from a day of no production,
+     * and telling those two apart is what this application is for.
+     *
+     * Today is folded in from live data, matching sumRange().
+     *
+     * @return array<int,array{ts:int,wh:float}>
+     */
+    public static function dailyTotals(int $fromTs, int $toTs): array
+    {
+        $count = self::inverterConfig()['count'];
+
+        // Keyed by date rather than timestamp: the logger writes 'dd.mm.yy',
+        // and two rows for one day would otherwise both survive.
+        $totals = [];
+        foreach (self::days() as $date => $perInverter) {
+            $ts = self::parseDate((string)$date);
+            if ($ts === 0 || $ts < $fromTs || $ts > $toTs) {
+                continue;
+            }
+
+            $total = 0.0;
+            foreach ($perInverter as $inverter => $wh) {
+                if ($inverter >= 0 && $inverter < $count) {
+                    $total += $wh;
+                }
+            }
+            $totals[(string)$date] = $total;
+        }
+
+        $todayKey = date('d.m.y');
+        $todayTs  = strtotime('today');
+        if (!isset($totals[$todayKey]) && $todayTs >= $fromTs && $todayTs <= $toTs) {
+            $totals[$todayKey] = array_sum(self::today()['wh']);
+        }
+
+        $series = [];
+        for ($ts = strtotime('today', $fromTs); $ts !== false && $ts <= $toTs; $ts = strtotime('+1 day', $ts)) {
+            $series[] = ['ts' => $ts, 'wh' => $totals[date('d.m.y', $ts)] ?? 0.0];
+        }
+
+        return $series;
+    }
+
+    /**
+     * One total per month of a year, January first.
+     *
+     * @return array<int,array{month:int,wh:float}>
+     */
+    public static function monthlyTotals(int $year): array
+    {
+        $series = [];
+        for ($month = 1; $month <= 12; $month++) {
+            $series[] = ['month' => $month, 'wh' => self::sumMonth($month, $year)['total']];
+        }
+
+        return $series;
+    }
+
     public static function sumLastDays(int $days): array
     {
         return self::sumRange(strtotime('today -' . ($days - 1) . ' days'), strtotime('today 23:59:59'));

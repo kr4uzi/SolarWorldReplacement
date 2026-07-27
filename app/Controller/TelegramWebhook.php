@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace PV\Controller;
 
 use PV\Auth;
+use PV\Chart;
 use PV\Env;
 use PV\Messages;
 use PV\Messenger;
@@ -157,10 +158,22 @@ final class TelegramWebhook implements Handler
     {
         $this->log("{$chatId} -> {$action}");
 
+        // The figures are the caption of their own chart: one message rather
+        // than a picture and a wall of numbers arriving separately. Messenger
+        // falls back to text wherever an image cannot be drawn or sent.
         match ($action) {
             Telegram::MENU_PORTAL => $this->sendPortalLink($user, $chatId),
-            Telegram::MENU_MONTH  => Messenger::reply($chatId, Messages::currentMonth()),
-            Telegram::MENU_YEAR   => Messenger::reply($chatId, Messages::currentYear()),
+            Telegram::MENU_WEEK   => Messenger::image($chatId, Chart::lastDays(7), Messages::lastDays(7)),
+            Telegram::MENU_MONTH  => Messenger::image(
+                $chatId,
+                Chart::month((int)date('n'), (int)date('Y')),
+                Messages::currentMonth()
+            ),
+            Telegram::MENU_YEAR   => Messenger::image(
+                $chatId,
+                Chart::year((int)date('Y')),
+                Messages::currentYear()
+            ),
             default               => Messenger::menu($chatId),
         };
     }
@@ -172,6 +185,7 @@ final class TelegramWebhook implements Handler
 
         foreach ([
             Telegram::MENU_PORTAL => ['portal', 'login', 'dashboard', 'zugang'],
+            Telegram::MENU_WEEK   => ['woche', '7 tage', 'grafik', 'chart', 'week'],
             Telegram::MENU_MONTH  => ['monat', 'monatsertrag', 'month'],
             Telegram::MENU_YEAR   => ['jahr', 'jahresertrag', 'year'],
         ] as $action => $keywords) {

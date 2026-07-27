@@ -51,4 +51,17 @@ interface Transport
      * @return array{ok:bool,status:int,body:string}
      */
     public function sendMenu(string $address): array;
+
+    /**
+     * Send a picture with a caption.
+     *
+     * Transports that cannot carry images send the caption on its own - the
+     * chart illustrates the figures, it never replaces them, so nobody loses
+     * information over a provider that only speaks text. The TextOnly trait
+     * implements exactly that.
+     *
+     * @param string $png raw image bytes
+     * @return array{ok:bool,status:int,body:string}
+     */
+    public function sendImage(string $address, string $png, string $caption): array;
 }

@@ -5,7 +5,7 @@ A PHP application for photovoltaic monitoring: a web dashboard behind chat-based
 ## Features
 
 - **Chat Login**: No passwords - a one-time link from the bot opens the portal
-- **Chat Bot**: German menu for month and year totals, in kWh and money
+- **Chat Bot**: German menu for week, month and year totals, in kWh and money, with charts
 - **Monitoring**: Monthly report on the 1st, and an alert when the plant stops producing
 - **Real-time Dashboard**: Shows today's, this month's, and this year's energy production
 - **Multiple Time Views**:
@@ -38,10 +38,13 @@ pv/
 │   ├── Db.php          # MySQL connection and schema
 │   ├── Auth.php        # Accounts, one-time tokens, sessions
 │   ├── Data.php        # Reads the logger's CSV/JS files
+│   ├── Chart.php       # Bar charts, drawn with GD
 │   ├── Messages.php    # German user-facing text
-│   ├── WhatsApp.php    # Meta Cloud API client
-│   └── Controller/     # Dashboard, Api, Login, Logout, Webhook
-├── views/              # dashboard.php, denied.php
+│   ├── Messenger.php   # Resolves the configured transport
+│   ├── HttpClient.php  # cURL with a stream fallback
+│   ├── Controller/     # Dashboard, Api, Login, Settings, webhooks
+│   └── Transport/      # Telegram, WhatsApp, Birdy, Http, LogFile
+├── views/              # dashboard.php, settings.php, login.php, denied.php
 └── data/               # Logger uploads (FTP target)
 ```
 
@@ -52,12 +55,13 @@ applies that route's authentication policy before any controller runs. Nothing
 under `app/` or `views/` is reachable directly, so authentication cannot be
 bypassed by requesting a file.
 
-The three policies exist because one global gate would not work:
+Each route carries its own policy, because one global gate would not work:
 
 | Route | Policy | Why |
 |---|---|---|
-| `/` and `/api` | `session` | Portal users, signed in from the chat bot |
-| `/login`, `/logout` | `public` | Must be reachable *before* a session exists |
+| `/`, `/api`, `/settings` | `session` | Portal users, signed in from the chat bot |
+| `/login` | `public` | Must be reachable *before* a session exists |
+| `/telegram-webhook` | `telegram` | Telegram's secret token, echoed on every delivery |
 | `/webhook` | `signature` | Meta is not a user and can never hold a session; it proves itself with an HMAC |
 
 MySQL holds accounts, login tokens and scheduling state only. Production
@@ -158,7 +162,14 @@ alert and the welcome message all run, and you read what would have been sent:
 ```
 
 That makes it useful while a provider is undecided or its onboarding is stuck,
-and afterwards for reproducing a problem without messaging real people.
+and afterwards for reproducing a problem without messaging real people. Charts
+are written next to the log as PNG files, since "a chart was attached" is not
+something you can check by reading.
+
+Only `telegram` uploads pictures; the others send the caption on its own. That
+is a deliberate property of the interface rather than a gap - callers ask for a
+chart without checking whether one is possible, and the figures are in the
+caption either way.
 
 ### Telegram
 
@@ -282,13 +293,39 @@ Message the business number and the German menu appears:
 | Option | Shows |
 |---|---|
 | **Portal** | A one-time login link to the dashboard |
-| **Monatsertrag** | Current month, in kWh and money |
-| **Jahresertrag** | Current year, in kWh and money |
+| **7 Tage** | The last week, one bar per day |
+| **Monatsertrag** | Current month, in kWh and money, one bar per day |
+| **Jahresertrag** | Current year, in kWh and money, one bar per month |
 
-Typed words work too - `portal`, `monat`, `jahr` (and `month`/`year`), with or
-without a leading slash. Anything unrecognised brings the menu back. Numbers
-that are not registered are ignored silently rather than told they lack access,
-which avoids confirming the number is live.
+Typed words work too - `portal`, `woche`, `monat`, `jahr` (and `week`/`month`/
+`year`), with or without a leading slash. Anything unrecognised brings the menu
+back. Numbers that are not registered are ignored silently rather than told they
+lack access, which avoids confirming the number is live.
+
+### Charts
+
+The three yield options answer with a bar chart, the figures as its caption -
+one message rather than a picture and a wall of numbers arriving separately.
+
+Drawn on the server with GD, so the production data never leaves it. That rules
+out the usual approach of posting values to a chart API, and it means no
+charting library to install. Days with no yield are marked in red rather than
+left blank, since a gap in a chart is indistinguishable from missing data - and
+telling those two apart is what this application is for. The month and year
+charts stop at today, so days that have not happened yet are not drawn as days
+without production.
+
+Everything degrades rather than fails:
+
+| If | Then |
+|---|---|
+| GD is missing | The figures are sent as text |
+| No TrueType font is installed | Labels use GD's bitmap face, with umlauts spelled out (`Größter` → `Groesster`) |
+| The upload to Telegram fails | The figures are sent as text |
+| The transport cannot carry images | The figures are sent as text |
+
+The last case is why the caption always repeats the numbers: the chart
+illustrates them, it never replaces them.
 
 Menu replies are free: the user opens a 24-hour service window by writing
 first, and free-form messages inside it cost nothing. The scheduled messages
@@ -333,7 +370,9 @@ account whose chosen time has passed today it considers:
 2. **The day's figures**, for those who asked for them.
 3. **A report on the month that just ended**, at the start of a month: total
    production, earnings, change against the previous month, change against the
-   same month a year earlier, and the best and weakest day.
+   same month a year earlier, and the best and weakest day - with the month's
+   daily figures attached as a chart, drawn once and reused for every
+   recipient.
 
 Everything else is a no-op, so 94 of the 96 daily runs only check the clock.
 The frequent cadence buys resilience, not freshness: what has already been sent
