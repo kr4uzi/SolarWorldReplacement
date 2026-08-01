@@ -216,6 +216,18 @@ if ($verbose && !$loggerOffline && !$noProduction) {
 
 // --- Housekeeping -----------------------------------------------------------
 
+// Record that the job ran at all, even when it had nothing to send. Not on a
+// dry run: those are typed by hand, and letting one count would make a dead
+// scheduler look alive for the next hour.
+//
+// Without this there is no way to tell a scheduler that was never configured
+// from a day where nothing needed sending: both look like an empty job_runs
+// table and a chat that stays quiet. 'check' reports it, which turns "my daily
+// report never arrived" into a one-line answer.
+if (!$dryRun) {
+    markSent('heartbeat');
+}
+
 $purged = Auth::purgeExpiredTokens();
 if ($purged > 0 && $verbose) {
     say("purged {$purged} expired login token(s)");

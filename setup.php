@@ -834,6 +834,30 @@ function runCheck(): int
         }
     }
 
+    // Nothing sends unless job.php is actually being run, and a scheduler that
+    // was never set up looks exactly like a quiet day from in here.
+    if (Db::isInstalled() && Db::isCurrent()) {
+        $lastRun = Db::conn()->query(
+            "SELECT ran_at FROM job_runs WHERE job_key = 'heartbeat'"
+        )->fetchColumn();
+
+        if ($lastRun === false) {
+            $bad('job.php', 'has never run - the scheduled messages need a cron entry:'
+                . ' */15 * * * * php ' . __DIR__ . '/job.php');
+        } else {
+            $age = time() - (int)strtotime((string)$lastRun);
+            $ago = $age < 3600
+                ? intdiv($age, 60) . ' minutes ago'
+                : ($age < 86400 ? intdiv($age, 3600) . ' hours ago' : intdiv($age, 86400) . ' days ago');
+
+            // A 15-minute cadence that has not been seen for an hour is not a
+            // slow run, it is a scheduler that has stopped.
+            $age > 3600
+                ? $warn('job.php', "last ran {$ago} ({$lastRun}) - expected every 15 minutes")
+                : $ok('job.php', "last ran {$ago}");
+        }
+    }
+
     // An account with nowhere to send is silently skipped by the job, which is
     // the correct behaviour and completely invisible - so say it here.
     if (Db::isInstalled() && Db::isCurrent()) {

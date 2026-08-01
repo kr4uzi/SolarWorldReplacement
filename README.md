@@ -481,11 +481,24 @@ on any day of the year, while a broken one is still at zero.
 
 ## The Job
 
-`job.php` runs every 15 minutes:
+**Nothing scheduled is sent unless this is running.** The portal will happily
+accept a daily report or a fault alert, and the settings page will show them
+switched on, but the messages themselves only exist because something calls
+`job.php` on a timer. It is a plain CLI script - there is no internal scheduler
+and no background process.
 
 ```bash
 */15 * * * * php /path/to/pv/job.php
 ```
+
+Use absolute paths for both the interpreter and the script: cron runs with a
+minimal environment and a working directory that is not the project. `which
+php` gives the interpreter, and if the host has several versions, take the CLI
+one rather than the web one.
+
+Check it is actually running with `php setup.php check`, which reports when the
+job last ran - a scheduler that was never configured otherwise looks exactly
+like a quiet day.
 
 What it sends is decided per user in the notification settings above. For each
 account whose chosen time has passed today it considers:
