@@ -266,6 +266,10 @@ $alert = strtotime('today ' . $alertTime) <= time()
     : null;
 
 $reports = reportsDue();
+if ($verbose) {
+    say('Reports in play today: ' . implode(', ', array_column($reports, 0))
+        . ((int)date('N') === 7 ? '' : ' (weekly only on Sundays)'));
+}
 $charts  = [];   // drawn at most once per run, on the first user who is owed one
 
 $users = Auth::activeUsers();
@@ -278,17 +282,33 @@ foreach ($users as $user) {
 
     // 1. Something is wrong with the plant. Judged plant-wide, delivered to
     //    whoever asked to hear about it.
-    if ($alert !== null && $settings['zero']) {
-        deliverTo($user, $alert[0] . '-' . $dateKey, $alert[1]);
+    if ($alert !== null) {
+        if ($settings['zero']) {
+            deliverTo($user, $alert[0] . '-' . $dateKey, $alert[1]);
+        } elseif ($verbose) {
+            say("skipped the alert for {$user['name']}: Störungsmeldung is switched off");
+        }
     }
 
     // 2. The reports, once this user's own time has passed.
+    //
+    // Every branch below explains itself under -v. A report that does not
+    // arrive is otherwise indistinguishable from a job that never considered
+    // it, and there are five separate reasons it might not - the switch, the
+    // time, the day, an empty account, and having gone already.
     if (!isDue($user)) {
+        if ($verbose) {
+            say("skipped all reports for {$user['name']}: their time "
+                . Auth::notifyTime($user) . ' has not passed yet (now ' . date('H:i') . ')');
+        }
         continue;
     }
 
     foreach ($reports as [$setting, $key, $text, $chart]) {
         if (!$settings[$setting]) {
+            if ($verbose) {
+                say("skipped {$key} for {$user['name']}: the {$setting} report is switched off");
+            }
             continue;
         }
 
