@@ -126,14 +126,30 @@ final class Messages
         return implode("\n", $lines);
     }
 
-    /** Today so far - what the daily update reports. */
-    public static function today(): string
+    /**
+     * The daily report: yesterday in full, then today so far.
+     *
+     * Covering only "today" made the report worth less the earlier it arrived
+     * - at 08:00 it says almost nothing, and the day it actually describes is
+     * never reported at all, because by the time that day is complete the
+     * report has moved on. Starting at the beginning of yesterday means every
+     * day is eventually reported whole, whatever time the reader chose.
+     */
+    public static function daily(): string
     {
-        $today = Data::today();
-        $total = array_sum($today['wh']);
+        $yesterday = Data::sumRange(strtotime('yesterday'), strtotime('yesterday 23:59:59'));
+        $today     = Data::today();
+        $todayTotal = array_sum($today['wh']);
 
-        $lines = ['☀️ Heute, Stand ' . date('H:i') . ' Uhr', '   ' . self::energy($total)];
-        $lines = array_merge($lines, self::breakdown($today['wh']));
+        $lines = [
+            '☀️ Ertrag',
+            '',
+            '   Gestern (' . date('d.m.', strtotime('yesterday')) . '): ' . self::energy($yesterday['total']),
+            '   Heute bis ' . date('H:i') . ' Uhr:  ' . self::energy($todayTotal),
+        ];
+
+        $lines[] = '';
+        $lines   = array_merge($lines, self::breakdown($today['wh']));
 
         $pac = array_sum($today['pac']);
         if ($pac > 0) {
@@ -388,12 +404,19 @@ final class Messages
         return implode("\n", $lines);
     }
 
-    public static function noProduction(array $today, float $thresholdWh): string
+    /**
+     * Nothing at all, from the whole plant.
+     *
+     * Exactly zero rather than "less than expected": the fault this is for is
+     * an inverter that has stopped, and that reports nothing. A threshold
+     * would only be meaningful at one particular hour, and would still miss
+     * the case it exists to catch on a bright afternoon.
+     */
+    public static function noProduction(array $today): string
     {
         $lines = [
             '⚠️ Keine Produktion',
-            '   Bis ' . date('H:i') . ' Uhr erst ' . self::kwh(array_sum($today['wh']))
-                . ' (erwartet: über ' . self::kwh($thresholdWh) . ').',
+            '   Bis ' . date('H:i') . ' Uhr wurde heute nichts erzeugt.',
         ];
 
         $parts = [];
@@ -407,8 +430,34 @@ final class Messages
         $lines[] = $today['ts'] > 0
             ? '   Letzte Daten: ' . date('d.m.y H:i', $today['ts'])
             : '   Es liegen überhaupt keine Live-Daten vor.';
+        $lines[] = '   Bitte Wechselrichter prüfen.';
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * One inverter is dead while the others are working.
+     *
+     * The case a whole-plant total cannot see: with two inverters and one
+     * failed, the sum stays comfortably above zero and everything looks fine,
+     * while half the roof earns nothing for as long as nobody notices.
+     *
+     * @param array<int,float> $dead inverter index => Wh (all zero)
+     */
+    public static function inverterDown(array $dead, float $plantTotalWh): string
+    {
+        $names = [];
+        foreach (array_keys($dead) as $inverter) {
+            $names[] = Data::inverterName($inverter);
+        }
+
+        return implode("\n", [
+            '⚠️ Wechselrichter ohne Ertrag',
+            '   ' . implode(', ', $names) . ': heute 0 kWh, während die Anlage',
+            '   insgesamt ' . self::kwh($plantTotalWh) . ' erzeugt hat.',
+            '',
+            '   Das deutet auf einen Ausfall an diesem Strang hin.',
+        ]);
     }
 
     /**

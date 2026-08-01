@@ -457,12 +457,9 @@ menu, or at `/settings` in the portal:
 | Monatsbericht | on | A report on the month that just ended, at the start of a month |
 | Uhrzeit | 12:15 | When the *reports* go out, using the browser's own time picker |
 
-The fault alert is the exception: it is judged plant-wide at `PV_ALERT_TIME`,
-and the switch decides only whether you hear about it. That separation matters
-- `PV_MIN_MIDDAY_WH` is a *midday* threshold, so evaluating it at somebody's
-07:00 reporting time would call every winter morning a fault, and evaluating it
-at 22:00 would find the problem after dark. When the plant is in trouble is not
-a per-person question.
+One time per account decides everything it receives. When it passes, the job
+works out what that person is owed - the alert if the plant is in trouble, plus
+whichever reports they asked for - and sends it.
 
 In the chat the three switches are buttons showing their own state, and tapping
 one rewrites the card in place rather than sending another copy - otherwise
@@ -534,24 +531,34 @@ going quiet, which reads like being ignored.
 What it sends is decided per user in the notification settings above. For each
 account whose chosen time has passed today it considers:
 
-Two different things happen, decided differently.
+**The fault alert** fires on exactly zero, not on a threshold. The fault worth
+hearing about is an inverter that has stopped, and a stopped inverter reports
+nothing at all - so there is nothing to tune, and no need for an hour of its
+own to be meaningful at. A threshold would have needed one: "100 Wh by now" is
+a fault at 14:00 and perfectly normal at 07:00, which is what would force a
+second, plant-wide schedule alongside each user's.
 
-**The fault alert** is about the plant, so it is judged once at
-`PV_ALERT_TIME`, for everybody: the plant produced less than
-`PV_MIN_MIDDAY_WH`, or no fresh readings exist at all, in which case the logger
-is reported as the fault instead - with a stalled upload there is no way to
-tell whether the panels are working. Each account only decides whether it wants
-to hear about it.
+Three states raise it:
 
-**The reports** are about a person, so each account chooses which it gets and
-at what time of day. They are three periods of one thing rather than three
-separate features:
+| | |
+|---|---|
+| The whole plant at zero | Every inverter has produced nothing today |
+| One inverter at zero | The others are working, so the total looks healthy and hides it - the case a plant-wide sum cannot see |
+| No fresh readings | Older than `PV_MAX_DATA_AGE_MINUTES`; the logger is reported as the fault, since with a stalled upload there is no way to tell whether the panels are working |
+
+**The reports** are three periods of one thing rather than three separate
+features:
 
 | Report | When | Job key |
 |---|---|---|
-| The day's figures | daily | `daily-2026-08-01` |
+| Yesterday in full, then today so far | daily | `daily-2026-08-01` |
 | The last seven days, with a chart | Sundays | `weekly-2026-W31` |
 | The month that just ended, with a chart | in the new month | `summary-2026-07` |
+
+The daily report starts at the beginning of *yesterday* rather than at
+midnight. Covering only "today" made it worth less the earlier it arrived - at
+08:00 it says almost nothing - and the day it described was never reported
+whole, because by the time that day was complete the report had moved on.
 
 The period is part of the key, which is what makes "send once" mean once a day,
 once a week or once a month with no further bookkeeping. So is the time the

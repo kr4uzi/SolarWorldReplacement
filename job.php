@@ -10,14 +10,14 @@ declare(strict_types=1);
  * what has already gone out today (for trying settings without waiting for
  * tomorrow).
  *
- * Two different things happen here, and they are decided differently.
+ * Each account has one time. When it passes, everything that account is owed
+ * is worked out and sent: the fault alert if the plant produced nothing, and
+ * whichever of the day, week and month reports it asked for.
  *
- * The fault alert - nothing produced, or the logger gone quiet - is about the
- * plant, so it is judged once, at PV_ALERT_TIME, for everybody. Each account
- * only decides whether it wants to hear about it.
- *
- * The reports - the day, the week, the month - are about a person, so each
- * account chooses which ones it gets and at what time of day.
+ * The alert tests for exactly zero rather than for a threshold, because the
+ * fault it is looking for is an inverter that has stopped - and that reports
+ * nothing at all. A threshold would need an hour of its own to be meaningful
+ * at, which is the only reason this ever needed two schedules.
  *
  * Everything else is a no-op, so most of the 96 daily runs do nothing but
  * check the clock. The frequent cadence buys resilience rather than freshness:
@@ -179,15 +179,17 @@ function isDue(array $user): bool
 // --- What is owed, and to whom ----------------------------------------------
 
 /**
- * Is the plant in trouble, judged once for everybody?
+ * Is the plant in trouble?
  *
- * Deliberately not per user. "Nothing produced yet" is a statement about the
- * plant, and PV_MIN_MIDDAY_WH is a midday threshold: asking it at 07:00 would
- * report every winter morning as a fault, and asking it at 20:00 would find
- * yesterday's problem after dark. So the check has one time of its own, and
- * the per-user setting decides only whether somebody hears about it.
+ * Judged at the reader's own time, because the test is "did it produce
+ * nothing" rather than "did it produce less than expected". A threshold needs
+ * an hour to be meaningful at - too early and every winter morning is a fault,
+ * too late and a bright afternoon hides a dead inverter - and needing an hour
+ * is what would force a second, plant-wide schedule. Zero needs no such thing.
+ *
+ * @return array{0:string,1:string}|null [key, message]
  */
-function plantAlert(array $today, float $threshold, float $ageMinutes, float $maxAgeMinutes): ?array
+function plantAlert(array $today, float $ageMinutes, float $maxAgeMinutes): ?array
 {
     if ($ageMinutes > $maxAgeMinutes) {
         // With no fresh readings we cannot say whether the plant is producing,
@@ -197,8 +199,16 @@ function plantAlert(array $today, float $threshold, float $ageMinutes, float $ma
         return ['offline', Messages::loggerOffline($newest, $ageMinutes / 60)];
     }
 
-    if (array_sum($today['wh']) < $threshold) {
-        return ['zeroday', Messages::noProduction($today, $threshold)];
+    $total = array_sum($today['wh']);
+    if ($total <= 0) {
+        return ['zeroday', Messages::noProduction($today)];
+    }
+
+    // One inverter dead among several: the total stays healthy and nothing
+    // looks wrong, while that string earns nothing until somebody notices.
+    $dead = array_filter($today['wh'], static fn($wh) => $wh <= 0);
+    if ($dead !== [] && count($dead) < count($today['wh'])) {
+        return ['inverter-' . implode('-', array_keys($dead)), Messages::inverterDown($dead, $total)];
     }
 
     return null;
@@ -222,7 +232,7 @@ function reportsDue(): array
 {
     $due = [];
 
-    $due[] = ['daily', 'daily-' . date('Y-m-d'), static fn() => Messages::today(), null];
+    $due[] = ['daily', 'daily-' . date('Y-m-d'), static fn() => Messages::daily(), null];
 
     // Sunday closes the week, so the report covers the seven days ending today.
     if ((int)date('N') === 7) {
@@ -254,18 +264,13 @@ function reportsDue(): array
 
 // --- The run ----------------------------------------------------------------
 
-$threshold = (float)Env::get('PV_MIN_MIDDAY_WH', 100);
 $maxAgeMin = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
-$alertTime = (string)Env::get('PV_ALERT_TIME', '12:00');
 $dateKey   = date('Y-m-d');
 
 // Read the plant once, not per user.
 $today      = Data::today();
 $ageMinutes = $today['ts'] > 0 ? (time() - $today['ts']) / 60 : INF;
-
-$alert = strtotime('today ' . $alertTime) <= time()
-    ? plantAlert($today, $threshold, $ageMinutes, $maxAgeMin)
-    : null;
+$alert      = plantAlert($today, $ageMinutes, $maxAgeMin);
 
 $reports = reportsDue();
 if ($verbose) {
@@ -282,30 +287,29 @@ if ($users === []) {
 foreach ($users as $user) {
     $settings = Auth::settings($user);
 
-    // 1. Something is wrong with the plant. Judged plant-wide, delivered to
-    //    whoever asked to hear about it.
+    // One time per account decides everything it gets. Every branch below
+    // explains itself under -v: a message that does not arrive is otherwise
+    // indistinguishable from a job that never considered it, and there are
+    // five separate reasons it might not - the switch, the time, the day, an
+    // empty account, and having gone already.
+    if (!isDue($user)) {
+        if ($verbose) {
+            say("skipped everything for {$user['name']}: their time "
+                . $settings['time'] . ' has not passed yet (now ' . date('H:i') . ')');
+        }
+        continue;
+    }
+
+    // 1. Something is wrong with the plant.
     if ($alert !== null) {
         if ($settings['zero']) {
-            deliverTo($user, $alert[0] . '-' . $dateKey, $alert[1]);
+            deliverTo($user, $alert[0] . '-' . $dateKey . '@' . $settings['time'], $alert[1]);
         } elseif ($verbose) {
             say("skipped the alert for {$user['name']}: Störungsmeldung is switched off");
         }
     }
 
-    // 2. The reports, once this user's own time has passed.
-    //
-    // Every branch below explains itself under -v. A report that does not
-    // arrive is otherwise indistinguishable from a job that never considered
-    // it, and there are five separate reasons it might not - the switch, the
-    // time, the day, an empty account, and having gone already.
-    if (!isDue($user)) {
-        if ($verbose) {
-            say("skipped all reports for {$user['name']}: their time "
-                . Auth::notifyTime($user) . ' has not passed yet (now ' . date('H:i') . ')');
-        }
-        continue;
-    }
-
+    // 2. The reports.
     foreach ($reports as [$setting, $key, $text, $chart]) {
         if (!$settings[$setting]) {
             if ($verbose) {
@@ -329,11 +333,9 @@ foreach ($users as $user) {
 }
 
 if ($verbose) {
-    say(strtotime('today ' . $alertTime) > time()
-        ? 'Plant check is not due until ' . $alertTime . '.'
-        : ($alert === null
-            ? 'Production OK: ' . Messages::kwh(array_sum($today['wh'])) . ' by ' . date('H:i')
-            : 'Plant fault: ' . $alert[0]));
+    say($alert === null
+        ? 'Plant OK: ' . Messages::kwh(array_sum($today['wh'])) . ' by ' . date('H:i')
+        : 'Plant fault: ' . $alert[0]);
 }
 
 // --- Housekeeping -----------------------------------------------------------
