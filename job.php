@@ -6,6 +6,10 @@ declare(strict_types=1);
  *
  *     *\/15 * * * * php /path/to/pv/job.php
  *
+ * Flags: -v prints what happened, --dry-run sends nothing, --force sends even
+ * what has already gone out today (for trying settings without waiting for
+ * tomorrow).
+ *
  * Two different things happen here, and they are decided differently.
  *
  * The fault alert - nothing produced, or the logger gone quiet - is about the
@@ -43,6 +47,11 @@ use PV\Messenger;
 
 $verbose = in_array('-v', $_SERVER['argv'], true) || in_array('--verbose', $_SERVER['argv'], true);
 $dryRun  = in_array('--dry-run', $_SERVER['argv'], true);
+
+// Send again something this user has already had today. For trying settings
+// out: the daily report goes once a day by design, so without this the only
+// way to see a change take effect is to wait until tomorrow.
+$force   = in_array('--force', $_SERVER['argv'], true);
 $log     = [];
 
 function say(string $line): void
@@ -109,10 +118,16 @@ function markSent(string $key): void
  */
 function deliverTo(array $user, string $baseKey, string $message, ?string $png = null): void
 {
-    global $dryRun;
+    global $dryRun, $force, $verbose;
 
     $key = $baseKey . '#' . $user['id'];
-    if (alreadySent($key)) {
+    if (alreadySent($key) && !$force) {
+        // Silence here reads as "the job ignored me", which is the wrong
+        // conclusion to draw while somebody is changing settings and running
+        // it again to see what happens.
+        if ($verbose || $dryRun) {
+            say("skipped {$baseKey} for {$user['name']}: already sent (use --force to send it again)");
+        }
         return;
     }
 

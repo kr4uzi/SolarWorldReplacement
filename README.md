@@ -520,6 +520,17 @@ trailing `-v` as its own option, prints its version and never runs the script,
 which looks like a job that did nothing. `php -f job.php -- -v` works, but
 there is no reason to use `-f` at all.
 
+| Flag | |
+|---|---|
+| `-v` | print what happened, including what was skipped and why |
+| `--dry-run` | work out what would be sent and send nothing |
+| `--force` | send even what has already gone out today |
+
+`--force` exists for trying settings out. Each report goes once per period by
+design, so after changing a switch the job would otherwise have nothing to do
+until tomorrow - and with `-v` it now says so (`already sent`) rather than
+going quiet, which reads like being ignored.
+
 What it sends is decided per user in the notification settings above. For each
 account whose chosen time has passed today it considers:
 
