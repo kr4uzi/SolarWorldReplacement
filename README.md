@@ -554,7 +554,11 @@ separate features:
 | The month that just ended, with a chart | in the new month | `summary-2026-07` |
 
 The period is part of the key, which is what makes "send once" mean once a day,
-once a week or once a month with no further bookkeeping. The monthly report
+once a week or once a month with no further bookkeeping. So is the time the
+user asked for - `daily-2026-08-01@11:43#3` - because changing that time is a
+new appointment, not one already kept. Without it, moving your reporting time
+after the day's report has gone does nothing until tomorrow, which from the
+outside is indistinguishable from the setting being ignored. The monthly report
 carries total production, earnings, the change against the previous month and
 against the same month a year earlier, and the best and weakest day.
 

@@ -27,7 +27,9 @@ declare(strict_types=1);
  * clock, so nothing is sent twice and nothing is lost by being late.
  *
  * Delivery is tracked per user, so someone unreachable is retried on the next
- * run without re-sending to everyone who already received the message.
+ * run without re-sending to everyone who already received the message. The
+ * record also carries the time the report was due, so changing that time is a
+ * new appointment rather than one already kept.
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -316,7 +318,13 @@ foreach ($users as $user) {
             $charts[$key] = $chart();
         }
 
-        deliverTo($user, $key, $text(), $charts[$key] ?? null);
+        // The time the user asked for is part of what "already sent" means.
+        // Without it the key says "once today", so moving the time forward
+        // after a report has gone out does nothing until tomorrow - and from
+        // the outside that is indistinguishable from the setting being
+        // ignored. With it, changing the time is a different appointment, and
+        // an unchanged one still goes exactly once.
+        deliverTo($user, $key . '@' . $settings['time'], $text(), $charts[$key] ?? null);
     }
 }
 
