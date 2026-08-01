@@ -327,6 +327,26 @@ function addressKind(): string
     }
 }
 
+/**
+ * '7 minutes', '2 hours', '3 days'.
+ *
+ * Minutes are kept well past the hour: at a 15-minute cadence "94 minutes"
+ * says something "1 hours" does not, and rounding an hour and a half down to
+ * a bare "1" hides exactly the gap worth noticing.
+ */
+function ageInWords(int $seconds): string
+{
+    foreach ([[86400, 'day'], [3600, 'hour'], [60, 'minute']] as [$unit, $name]) {
+        if ($seconds >= $unit * ($unit === 3600 ? 3 : 1)) {
+            $count = intdiv($seconds, $unit);
+
+            return $count . ' ' . $name . ($count === 1 ? '' : 's');
+        }
+    }
+
+    return intdiv($seconds, 60) . ' minutes';
+}
+
 /** @return never */
 function fail(string $message, int $code = 1)
 {
@@ -848,17 +868,20 @@ function runCheck(): int
 
         if ($lastRun === false) {
             $bad('job.php', 'has never run - the scheduled messages need a cron entry:'
-                . ' */15 * * * * php ' . __DIR__ . '/job.php');
+                . ' */15 * * * * ' . PHP_BINARY . ' ' . __DIR__ . '/job.php');
         } else {
             $age = time() - (int)strtotime((string)$lastRun);
-            $ago = $age < 3600
-                ? intdiv($age, 60) . ' minutes ago'
-                : ($age < 86400 ? intdiv($age, 3600) . ' hours ago' : intdiv($age, 86400) . ' days ago');
+            $ago = ageInWords($age) . ' ago';
 
-            // A 15-minute cadence that has not been seen for an hour is not a
-            // slow run, it is a scheduler that has stopped.
-            $age > 3600
-                ? $warn('job.php', "last ran {$ago} ({$lastRun}) - expected every 15 minutes")
+            // Deliberately loose about the interval. Every 15 minutes is what
+            // this is built for, but shared hosts often only offer hourly, and
+            // that works too - a message stays owed until it has been sent, so
+            // a longer interval delivers late rather than not at all. Warning
+            // at an hour would cry wolf on exactly those hosts, so the line is
+            // drawn where no reasonable schedule can still be running.
+            $age > 5400
+                ? $warn('job.php', "last ran {$ago} ({$lastRun}) - longer than any"
+                    . ' schedule should leave it; check the cron entry is still firing')
                 : $ok('job.php', "last ran {$ago}");
         }
     }
