@@ -181,24 +181,20 @@ function isDue(array $user): bool
 /**
  * Is the plant in trouble?
  *
- * Judged at the reader's own time, because the test is "did it produce
- * nothing" rather than "did it produce less than expected". A threshold needs
- * an hour to be meaningful at - too early and every winter morning is a fault,
- * too late and a bright afternoon hides a dead inverter - and needing an hour
- * is what would force a second, plant-wide schedule. Zero needs no such thing.
+ * One question only: has it produced anything today by the time the reader
+ * asked to be told. Not how much - a threshold needs an hour to be meaningful
+ * at, and needing an hour is what would force a second, plant-wide schedule.
+ *
+ * And deliberately not "are the readings fresh". Inverters stop uploading when
+ * they stop producing, so after sunset the newest reading is always hours old:
+ * a staleness check reports every evening as a fault. The energy accumulated
+ * today is the honest measure, and it stays correct all night - a plant that
+ * worked has a day's total, whatever time anybody reads it.
  *
  * @return array{0:string,1:string}|null [key, message]
  */
-function plantAlert(array $today, float $ageMinutes, float $maxAgeMinutes): ?array
+function plantAlert(array $today): ?array
 {
-    if ($ageMinutes > $maxAgeMinutes) {
-        // With no fresh readings we cannot say whether the plant is producing,
-        // so report the upload as the fault rather than blaming the panels.
-        $newest = $today['ts'] > 0 ? $today['ts'] : Data::newestDay();
-
-        return ['offline', Messages::loggerOffline($newest, $ageMinutes / 60)];
-    }
-
     $total = array_sum($today['wh']);
     if ($total <= 0) {
         return ['zeroday', Messages::noProduction($today)];
@@ -264,13 +260,11 @@ function reportsDue(): array
 
 // --- The run ----------------------------------------------------------------
 
-$maxAgeMin = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
-$dateKey   = date('Y-m-d');
+$dateKey = date('Y-m-d');
 
 // Read the plant once, not per user.
-$today      = Data::today();
-$ageMinutes = $today['ts'] > 0 ? (time() - $today['ts']) / 60 : INF;
-$alert      = plantAlert($today, $ageMinutes, $maxAgeMin);
+$today = Data::today();
+$alert = plantAlert($today);
 
 $reports = reportsDue();
 if ($verbose) {

@@ -531,7 +531,15 @@ going quiet, which reads like being ignored.
 What it sends is decided per user in the notification settings above. For each
 account whose chosen time has passed today it considers:
 
-**The fault alert** fires on exactly zero, not on a threshold. The fault worth
+**The fault alert** asks one question: has the plant produced anything today by
+the time you asked to be told. Not how much, and deliberately **not whether the
+readings are fresh** - inverters stop uploading when they stop producing, so
+after sunset the newest reading is always hours old, and a staleness check
+reports every evening as a fault. Energy accumulated today is the honest
+measure: it stays correct all night, because a plant that worked has a day's
+total whatever time anybody reads it.
+
+It fires on exactly zero, not on a threshold. The fault worth
 hearing about is an inverter that has stopped, and a stopped inverter reports
 nothing at all - so there is nothing to tune, and no need for an hour of its
 own to be meaningful at. A threshold would have needed one: "100 Wh by now" is
@@ -544,7 +552,7 @@ Three states raise it:
 |---|---|
 | The whole plant at zero | Every inverter has produced nothing today |
 | One inverter at zero | The others are working, so the total looks healthy and hides it - the case a plant-wide sum cannot see |
-| No fresh readings | Older than `PV_MAX_DATA_AGE_MINUTES`; the logger is reported as the fault, since with a stalled upload there is no way to tell whether the panels are working |
+| No readings at all today | The file holds nothing dated today, which reads the same as producing nothing - because it is |
 
 **The reports** are three periods of one thing rather than three separate
 features:

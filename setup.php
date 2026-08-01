@@ -801,9 +801,13 @@ function runCheck(): int
         if ($today['ts'] === 0) {
             $warn('min_day.js', 'no live readings - fine at night, otherwise check the upload');
         } else {
+            // Advisory only, and never a problem: a human is reading this and
+            // knows whether the sun is up. The alert itself does not judge
+            // freshness at all - see plantAlert() in job.php.
             $age = (time() - $today['ts']) / 60;
-            $age > (float)PV\Env::get('PV_MAX_DATA_AGE_MINUTES', 60)
-                ? $warn('min_day.js', sprintf('last reading %s (%.0f min old)', date('H:i', $today['ts']), $age))
+            $age > 60
+                ? $warn('min_day.js', sprintf('last reading %s (%.0f min old - normal after sunset)',
+                    date('H:i', $today['ts']), $age))
                 : $ok('min_day.js', 'last reading ' . date('H:i', $today['ts']));
         }
 

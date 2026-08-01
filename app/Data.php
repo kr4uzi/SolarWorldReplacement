@@ -113,13 +113,21 @@ final class Data
 
         // Rows are usually newest-first, but scan all and keep the newest so we
         // do not depend on the logger's ordering.
+        //
+        // Readings from an earlier day are ignored. Inverters stop uploading
+        // when they stop producing, so between sunset and the next morning
+        // this file still holds yesterday's last row - and counting that as
+        // today would report yesterday's total twice: once as itself, and
+        // again as today's figure until the sun came up.
+        $startOfToday = (int)strtotime('today');
+
         foreach (explode("\n", trim((string)file_get_contents($file))) as $line) {
             if (!preg_match('/"([^"]+)"/', $line, $m)) {
                 continue;
             }
             $parts = explode('|', $m[1]);
             $ts    = self::parseDateTime($parts[0] ?? '');
-            if ($ts === 0 || $ts <= $result['ts']) {
+            if ($ts === 0 || $ts <= $result['ts'] || $ts < $startOfToday) {
                 continue;
             }
 

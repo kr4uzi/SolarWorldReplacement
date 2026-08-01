@@ -460,20 +460,4 @@ final class Messages
         ]);
     }
 
-    /**
-     * Distinct from noProduction() on purpose: if the upload has stopped we
-     * cannot tell whether the plant is producing, and reporting "no power"
-     * would point at the wrong fault.
-     */
-    public static function loggerOffline(int $newestTs, float $ageHours): string
-    {
-        $lines = ['⚠️ Datenlogger meldet sich nicht'];
-        $lines[] = $newestTs > 0
-            ? '   Seit ' . self::number($ageHours, 0) . ' Stunden keine neuen Daten'
-                . ' (zuletzt: ' . date('d.m.y H:i', $newestTs) . ').'
-            : '   Es wurden überhaupt keine Daten gefunden.';
-        $lines[] = '   Bitte Logger und FTP-Upload prüfen.';
-
-        return implode("\n", $lines);
-    }
 }
