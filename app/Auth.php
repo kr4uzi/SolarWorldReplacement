@@ -183,6 +183,7 @@ final class Auth
         return [
             'zero'    => (bool)($user['notify_zero'] ?? true),
             'daily'   => (bool)($user['notify_daily'] ?? false),
+            'weekly'  => (bool)($user['notify_weekly'] ?? false),
             'monthly' => (bool)($user['notify_monthly'] ?? true),
             'time'    => self::notifyTime($user),
         ];
@@ -201,7 +202,14 @@ final class Auth
             : '12:15';
     }
 
-    public static function saveSettings(int $userId, bool $zero, bool $daily, bool $monthly, string $time): void
+    public static function saveSettings(
+        int $userId,
+        bool $zero,
+        bool $daily,
+        bool $weekly,
+        bool $monthly,
+        string $time
+    ): void
     {
         // Seconds are optional: <input type="time"> posts 'HH:MM' in most
         // browsers but 'HH:MM:SS' in some, and rejecting the longer form threw
@@ -213,17 +221,18 @@ final class Auth
             : null;
 
         $statement = Db::conn()->prepare(
-            'UPDATE users SET notify_zero = ?, notify_daily = ?, notify_monthly = ?,
-                 notify_time = COALESCE(?, notify_time)
+            'UPDATE users SET notify_zero = ?, notify_daily = ?, notify_weekly = ?,
+                 notify_monthly = ?, notify_time = COALESCE(?, notify_time)
              WHERE id = ?'
         );
-        $statement->execute([(int)$zero, (int)$daily, (int)$monthly, $time, $userId]);
+        $statement->execute([(int)$zero, (int)$daily, (int)$weekly, (int)$monthly, $time, $userId]);
     }
 
     /** The switches that can be flipped one at a time, and their columns. */
     public const NOTIFICATIONS = [
         'zero'    => 'notify_zero',
         'daily'   => 'notify_daily',
+        'weekly'  => 'notify_weekly',
         'monthly' => 'notify_monthly',
     ];
 

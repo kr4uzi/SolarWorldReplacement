@@ -42,6 +42,7 @@ final class Settings implements Handler
                 (int)$user['id'],
                 isset($_POST['zero']),
                 isset($_POST['daily']),
+                isset($_POST['weekly']),
                 isset($_POST['monthly']),
                 (string)($_POST['time'] ?? '')
             );

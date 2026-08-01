@@ -222,6 +222,7 @@ final class Messages
         return [
             'zero'    => 'Störungsmeldung',
             'daily'   => 'Täglicher Ertrag',
+            'weekly'  => 'Wochenbericht',
             'monthly' => 'Monatsbericht',
         ];
     }

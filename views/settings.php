@@ -96,7 +96,8 @@
                 <label for="zero">
                     Störungsmeldung
                     <span class="why">Wenn die Anlage nichts produziert oder der Logger
-                    keine Daten mehr liefert.</span>
+                    keine Daten mehr liefert. Geprüft wird mittags, unabhängig von
+                    der Uhrzeit unten.</span>
                 </label>
             </div>
 
@@ -105,6 +106,14 @@
                 <label for="daily">
                     Täglicher Ertrag
                     <span class="why">Jeden Tag der bisherige Ertrag zur eingestellten Zeit.</span>
+                </label>
+            </div>
+
+            <div class="option">
+                <input type="checkbox" id="weekly" name="weekly" <?= $settings['weekly'] ? 'checked' : '' ?>>
+                <label for="weekly">
+                    Wochenbericht
+                    <span class="why">Sonntags der Ertrag der letzten sieben Tage, mit Grafik.</span>
                 </label>
             </div>
 
@@ -121,7 +130,7 @@
                 <input type="time" id="time" name="time"
                        value="<?= htmlspecialchars($settings['time'], ENT_QUOTES, 'UTF-8') ?>">
                 <p class="why">
-                    Wann die Nachrichten verschickt werden. Mittags ist sinnvoll:
+                    Wann die Berichte verschickt werden. Mittags ist sinnvoll:
                     bis dahin hat eine funktionierende Anlage an jedem Tag des
                     Jahres etwas erzeugt, eine defekte steht noch bei null.
                 </p>

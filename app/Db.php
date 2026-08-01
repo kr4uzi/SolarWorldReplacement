@@ -127,6 +127,7 @@ final class Db
         foreach ([
             'notify_zero'    => 'TINYINT(1) NOT NULL DEFAULT 1',
             'notify_daily'   => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'notify_weekly'  => 'TINYINT(1) NOT NULL DEFAULT 0',
             'notify_monthly' => 'TINYINT(1) NOT NULL DEFAULT 1',
             'notify_time'    => "TIME NOT NULL DEFAULT '12:15'",
         ] as $column => $definition) {
@@ -193,6 +194,7 @@ final class Db
                     invite_code VARCHAR(64) NULL,
                     notify_zero    TINYINT(1) NOT NULL DEFAULT 1,
                     notify_daily   TINYINT(1) NOT NULL DEFAULT 0,
+                    notify_weekly  TINYINT(1) NOT NULL DEFAULT 0,
                     notify_monthly TINYINT(1) NOT NULL DEFAULT 1,
                     notify_time    TIME       NOT NULL DEFAULT '12:15',
                     is_active  TINYINT(1)   NOT NULL DEFAULT 1,

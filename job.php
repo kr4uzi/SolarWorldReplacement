@@ -6,14 +6,14 @@ declare(strict_types=1);
  *
  *     *\/15 * * * * php /path/to/pv/job.php
  *
- * What it sends is decided per user, in the portal's notification settings:
+ * Two different things happen here, and they are decided differently.
  *
- *   - a fault alert when the plant produces nothing, or the logger goes quiet
- *   - the day's figures, for those who want them
- *   - a report on the month that just ended, at the start of a month
+ * The fault alert - nothing produced, or the logger gone quiet - is about the
+ * plant, so it is judged once, at PV_ALERT_TIME, for everybody. Each account
+ * only decides whether it wants to hear about it.
  *
- * Each account also carries its own time of day, so the job cannot ask "is it
- * time yet" once for everybody - it asks per user.
+ * The reports - the day, the week, the month - are about a person, so each
+ * account chooses which ones it gets and at what time of day.
  *
  * Everything else is a no-op, so most of the 96 daily runs do nothing but
  * check the clock. The frequent cadence buys resilience rather than freshness:
@@ -145,15 +145,12 @@ function deliverTo(array $user, string $baseKey, string $message, ?string $png =
     }
 }
 
-// --- Per-user schedule ------------------------------------------------------
-
 /**
  * Has this user's chosen time passed today?
  *
- * Each account carries its own time, so the job cannot ask the question once
- * for everybody. Anything from that moment until midnight counts as "due":
- * what has already been sent is recorded in job_runs, so a late run delivers
- * rather than skipping - which is the whole point of running every 15 minutes.
+ * Anything from that moment until midnight counts as due: what has already
+ * been sent is recorded in job_runs, so a late run delivers rather than
+ * skipping - which is the whole point of running often.
  */
 function isDue(array $user): bool
 {
@@ -162,28 +159,99 @@ function isDue(array $user): bool
     return $due !== false && time() >= $due;
 }
 
-$threshold   = (float)Env::get('PV_MIN_MIDDAY_WH', 100);
-$maxAgeMin   = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
-$dateKey     = date('Y-m-d');
+// --- What is owed, and to whom ----------------------------------------------
+
+/**
+ * Is the plant in trouble, judged once for everybody?
+ *
+ * Deliberately not per user. "Nothing produced yet" is a statement about the
+ * plant, and PV_MIN_MIDDAY_WH is a midday threshold: asking it at 07:00 would
+ * report every winter morning as a fault, and asking it at 20:00 would find
+ * yesterday's problem after dark. So the check has one time of its own, and
+ * the per-user setting decides only whether somebody hears about it.
+ */
+function plantAlert(array $today, float $threshold, float $ageMinutes, float $maxAgeMinutes): ?array
+{
+    if ($ageMinutes > $maxAgeMinutes) {
+        // With no fresh readings we cannot say whether the plant is producing,
+        // so report the upload as the fault rather than blaming the panels.
+        $newest = $today['ts'] > 0 ? $today['ts'] : Data::newestDay();
+
+        return ['offline', Messages::loggerOffline($newest, $ageMinutes / 60)];
+    }
+
+    if (array_sum($today['wh']) < $threshold) {
+        return ['zeroday', Messages::noProduction($today, $threshold)];
+    }
+
+    return null;
+}
+
+/**
+ * The reports a user is owed, as [setting, job key, text, chart].
+ *
+ * Daily, weekly and monthly are the same thing over different periods, so they
+ * are described rather than special-cased. The period is part of the job key,
+ * which is what makes "send this once" mean once per day, per week, or per
+ * month without any further bookkeeping.
+ *
+ * A report is owed from the user's chosen time until it has actually been
+ * sent - not only on the run that first crosses that time. That is what
+ * carries a message over a missed tick, a failed delivery or a host that was
+ * down all afternoon, and it is why nothing here consults the clock beyond
+ * asking whether the time has passed.
+ */
+function reportsDue(): array
+{
+    $due = [];
+
+    $due[] = ['daily', 'daily-' . date('Y-m-d'), static fn() => Messages::today(), null];
+
+    // Sunday closes the week, so the report covers the seven days ending today.
+    if ((int)date('N') === 7) {
+        $due[] = [
+            'weekly',
+            'weekly-' . date('o-\WW'),
+            static fn() => Messages::lastDays(7),
+            static fn() => Chart::lastDays(7),
+        ];
+    }
+
+    // The month that just ended. Owed for the whole of the new month rather
+    // than its first days: job_runs records it once it has gone out, so there
+    // is nothing to bound, and a window would only decide how long an outage
+    // may last before the report is lost.
+    $first = strtotime('first day of last month');
+    $month = (int)date('n', $first);
+    $year  = (int)date('Y', $first);
+
+    $due[] = [
+        'monthly',
+        sprintf('summary-%04d-%02d', $year, $month),
+        static fn() => Messages::monthlySummary($month, $year),
+        static fn() => Chart::month($month, $year),
+    ];
+
+    return $due;
+}
+
+// --- The run ----------------------------------------------------------------
+
+$threshold = (float)Env::get('PV_MIN_MIDDAY_WH', 100);
+$maxAgeMin = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
+$alertTime = (string)Env::get('PV_ALERT_TIME', '12:00');
+$dateKey   = date('Y-m-d');
 
 // Read the plant once, not per user.
 $today      = Data::today();
 $ageMinutes = $today['ts'] > 0 ? (time() - $today['ts']) / 60 : INF;
-$todayTotal = array_sum($today['wh']);
 
-$loggerOffline = $ageMinutes > $maxAgeMin;
-$noProduction  = !$loggerOffline && $todayTotal < $threshold;
+$alert = strtotime('today ' . $alertTime) <= time()
+    ? plantAlert($today, $threshold, $ageMinutes, $maxAgeMin)
+    : null;
 
-$firstOfLastMonth = strtotime('first day of last month');
-$lastMonth        = (int)date('n', $firstOfLastMonth);
-$lastMonthYear    = (int)date('Y', $firstOfLastMonth);
-
-// The report on the month that just ended is owed for the whole of the new
-// month, not just its first days: job_runs records it per user once it has
-// gone out, so there is nothing to bound. A window would only decide how long
-// an outage may last before the report is lost, and losing it is never what
-// anybody wanted.
-$monthChart = null;
+$reports = reportsDue();
+$charts  = [];   // drawn at most once per run, on the first user who is owed one
 
 $users = Auth::activeUsers();
 if ($users === []) {
@@ -191,47 +259,38 @@ if ($users === []) {
 }
 
 foreach ($users as $user) {
+    $settings = Auth::settings($user);
+
+    // 1. Something is wrong with the plant. Judged plant-wide, delivered to
+    //    whoever asked to hear about it.
+    if ($alert !== null && $settings['zero']) {
+        deliverTo($user, $alert[0] . '-' . $dateKey, $alert[1]);
+    }
+
+    // 2. The reports, once this user's own time has passed.
     if (!isDue($user)) {
         continue;
     }
 
-    $settings = Auth::settings($user);
-
-    // 1. Something is wrong with the plant.
-    if ($settings['zero']) {
-        if ($loggerOffline) {
-            // With no fresh readings we cannot say whether the plant is
-            // producing, so report the upload as the fault rather than
-            // blaming the panels.
-            $newest = $today['ts'] > 0 ? $today['ts'] : Data::newestDay();
-            deliverTo($user, 'offline-' . $dateKey, Messages::loggerOffline($newest, $ageMinutes / 60));
-        } elseif ($noProduction) {
-            deliverTo($user, 'zeroday-' . $dateKey, Messages::noProduction($today, $threshold));
+    foreach ($reports as [$setting, $key, $text, $chart]) {
+        if (!$settings[$setting]) {
+            continue;
         }
-    }
 
-    // 2. The day's figures, for those who want them.
-    if ($settings['daily']) {
-        deliverTo($user, 'daily-' . $dateKey, Messages::today());
-    }
+        if ($chart !== null && !array_key_exists($key, $charts)) {
+            $charts[$key] = $chart();
+        }
 
-    // 3. The month that just ended, with its daily figures as a chart. The
-    //    chart is drawn at most once per run, on the first user who is owed
-    //    it, and reused for the rest.
-    if ($settings['monthly']) {
-        $monthChart ??= Chart::month($lastMonth, $lastMonthYear);
-
-        deliverTo(
-            $user,
-            sprintf('summary-%04d-%02d', $lastMonthYear, $lastMonth),
-            Messages::monthlySummary($lastMonth, $lastMonthYear),
-            $monthChart
-        );
+        deliverTo($user, $key, $text(), $charts[$key] ?? null);
     }
 }
 
-if ($verbose && !$loggerOffline && !$noProduction) {
-    say('Production OK: ' . Messages::kwh($todayTotal) . ' by ' . date('H:i'));
+if ($verbose) {
+    say(strtotime('today ' . $alertTime) > time()
+        ? 'Plant check is not due until ' . $alertTime . '.'
+        : ($alert === null
+            ? 'Production OK: ' . Messages::kwh(array_sum($today['wh'])) . ' by ' . date('H:i')
+            : 'Plant fault: ' . $alert[0]));
 }
 
 // --- Housekeeping -----------------------------------------------------------
