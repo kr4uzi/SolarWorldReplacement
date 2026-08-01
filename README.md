@@ -454,7 +454,7 @@ menu, or at `/settings` in the portal:
 | Störungsmeldung | on | The plant produced nothing, or the logger went quiet |
 | Täglicher Ertrag | off | The day's figures so far |
 | Monatsbericht | on | A report on the month that just ended, at the start of a month |
-| Uhrzeit | `JOB_TRIGGER_TIME` | When those go out, using the browser's own time picker |
+| Uhrzeit | 12:15 | When those go out, using the browser's own time picker |
 
 In the chat the three switches are buttons showing their own state, and tapping
 one rewrites the card in place rather than sending another copy - otherwise
@@ -480,6 +480,10 @@ Midday remains a sensible time: by then a working plant has produced something
 on any day of the year, while a broken one is still at zero.
 
 ## The Job
+
+There is one scheduling setting in `.env`, and it is `PV_TIMEZONE`. *When* each
+user's messages go out is chosen per account in the portal, and *whether* they
+have gone out is recorded in `job_runs` - neither is configuration.
 
 **Nothing scheduled is sent unless this is running.** The portal will happily
 accept a daily report or a fault alert, and the settings page will show them
@@ -522,11 +526,15 @@ account whose chosen time has passed today it considers:
    daily figures attached as a chart, drawn once and reused for every
    recipient.
 
-Everything else is a no-op, so 94 of the 96 daily runs only check the clock.
-The frequent cadence buys resilience, not freshness: what has already been sent
-is recorded in `job_runs` rather than inferred from the current time, so a run
-missed at 12:15 still delivers later, and a missed 1st still delivers the
-monthly report within `JOB_MONTHLY_CATCHUP_DAYS`.
+Everything else is a no-op, so most of the 96 daily runs only check the clock.
+
+The cadence buys resilience, not freshness, and it is `job_runs` rather than
+the clock that makes that work. A message is owed from the user's chosen time
+until it has actually been sent, and the record of sending is what stops it
+going twice - so the run *after* the one that should have caught it delivers
+it, and so does a run hours later if the host was down. There is no window to
+tune and nothing to miss by being late: a report on the month that just ended
+stays owed for the whole of the new month, not for the first few days of it.
 
 Delivery is tracked per user, so an unreachable recipient is retried on the
 next run without re-sending to everyone who already received it.

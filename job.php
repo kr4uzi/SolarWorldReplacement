@@ -15,11 +15,12 @@ declare(strict_types=1);
  * Each account also carries its own time of day, so the job cannot ask "is it
  * time yet" once for everybody - it asks per user.
  *
- * Everything else is a no-op, so 94 of the 96 daily runs do nothing but check
- * the clock. The frequent cadence buys resilience rather than freshness: if
- * the host is down or the network is out at 12:15, a later run still delivers,
- * because what has already been sent is recorded in job_runs rather than
- * inferred from the current time.
+ * Everything else is a no-op, so most of the 96 daily runs do nothing but
+ * check the clock. The frequent cadence buys resilience rather than freshness:
+ * a message missed because the host was down, or because the tick before the
+ * user's time was the last one to run, still goes out on a later run. What has
+ * already been sent is recorded in job_runs rather than inferred from the
+ * clock, so nothing is sent twice and nothing is lost by being late.
  *
  * Delivery is tracked per user, so someone unreachable is retried on the next
  * run without re-sending to everyone who already received the message.
@@ -161,7 +162,6 @@ function isDue(array $user): bool
     return $due !== false && time() >= $due;
 }
 
-$catchUpDays = max(1, (int)Env::get('JOB_MONTHLY_CATCHUP_DAYS', 3));
 $threshold   = (float)Env::get('PV_MIN_MIDDAY_WH', 100);
 $maxAgeMin   = (float)Env::get('PV_MAX_DATA_AGE_MINUTES', 60);
 $dateKey     = date('Y-m-d');
@@ -178,9 +178,12 @@ $firstOfLastMonth = strtotime('first day of last month');
 $lastMonth        = (int)date('n', $firstOfLastMonth);
 $lastMonthYear    = (int)date('Y', $firstOfLastMonth);
 
-// The chart that goes with the monthly report is drawn once, not per recipient.
-$monthlyWindow = (int)date('j') <= $catchUpDays;
-$monthChart    = $monthlyWindow ? Chart::month($lastMonth, $lastMonthYear) : null;
+// The report on the month that just ended is owed for the whole of the new
+// month, not just its first days: job_runs records it per user once it has
+// gone out, so there is nothing to bound. A window would only decide how long
+// an outage may last before the report is lost, and losing it is never what
+// anybody wanted.
+$monthChart = null;
 
 $users = Auth::activeUsers();
 if ($users === []) {
@@ -212,9 +215,12 @@ foreach ($users as $user) {
         deliverTo($user, 'daily-' . $dateKey, Messages::today());
     }
 
-    // 3. The month that just ended, with its daily figures as a chart. Both
-    //    are rendered once and reused for every recipient.
-    if ($settings['monthly'] && $monthlyWindow) {
+    // 3. The month that just ended, with its daily figures as a chart. The
+    //    chart is drawn at most once per run, on the first user who is owed
+    //    it, and reused for the rest.
+    if ($settings['monthly']) {
+        $monthChart ??= Chart::month($lastMonth, $lastMonthYear);
+
         deliverTo(
             $user,
             sprintf('summary-%04d-%02d', $lastMonthYear, $lastMonth),

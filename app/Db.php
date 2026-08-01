@@ -128,12 +128,32 @@ final class Db
             'notify_zero'    => 'TINYINT(1) NOT NULL DEFAULT 1',
             'notify_daily'   => 'TINYINT(1) NOT NULL DEFAULT 0',
             'notify_monthly' => 'TINYINT(1) NOT NULL DEFAULT 1',
-            // NULL means "use JOB_TRIGGER_TIME".
-            'notify_time'    => 'TIME NULL',
+            'notify_time'    => "TIME NOT NULL DEFAULT '12:15'",
         ] as $column => $definition) {
             if (!self::hasColumn('users', $column)) {
                 $pending["users.{$column}"] = "ALTER TABLE users ADD COLUMN {$column} {$definition}";
             }
+        }
+
+        // notify_time used to be nullable, with NULL meaning "fall back to the
+        // installation-wide JOB_TRIGGER_TIME". That setting is gone: every
+        // account carries its own time, so an invisible global that silently
+        // decided when other people's messages went out was one indirection
+        // with nothing left to justify it.
+        //
+        // Rows that never chose a time inherit whatever that setting said, so
+        // nobody's schedule moves when the column stops being nullable.
+        if (self::hasColumn('users', 'notify_time') && self::columnIsNullable('users', 'notify_time')) {
+            $legacy = trim((string)Env::get('JOB_TRIGGER_TIME', '12:15'));
+            $legacy = preg_match('/^(\d{1,2}):(\d{2})/', $legacy, $m) === 1
+                ? sprintf('%02d:%02d:00', min(23, (int)$m[1]), min(59, (int)$m[2]))
+                : '12:15:00';
+
+            $pending['users.notify_time default'] = [
+                'UPDATE users SET notify_time = ' . self::conn()->quote($legacy)
+                    . ' WHERE notify_time IS NULL',
+                "ALTER TABLE users MODIFY notify_time TIME NOT NULL DEFAULT '12:15'",
+            ];
         }
 
         // Users reached by address have no phone number. It has to be NULL
@@ -174,7 +194,7 @@ final class Db
                     notify_zero    TINYINT(1) NOT NULL DEFAULT 1,
                     notify_daily   TINYINT(1) NOT NULL DEFAULT 0,
                     notify_monthly TINYINT(1) NOT NULL DEFAULT 1,
-                    notify_time    TIME       NULL,
+                    notify_time    TIME       NOT NULL DEFAULT '12:15',
                     is_active  TINYINT(1)   NOT NULL DEFAULT 1,
                     created_at DATETIME     NOT NULL,
                     PRIMARY KEY (id),
@@ -235,9 +255,13 @@ final class Db
             $applied[] = "created table {$table}";
         }
 
-        // Then whatever a pre-existing installation is missing.
-        foreach (self::pending() as $label => $statement) {
-            self::conn()->exec($statement);
+        // Then whatever a pre-existing installation is missing. A change may
+        // need more than one statement - backfilling a column before it can be
+        // made NOT NULL, for instance - so a list is allowed here.
+        foreach (self::pending() as $label => $statements) {
+            foreach ((array)$statements as $statement) {
+                self::conn()->exec($statement);
+            }
             $applied[] = "added {$label}";
         }
 

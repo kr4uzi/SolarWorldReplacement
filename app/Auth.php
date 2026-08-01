@@ -177,12 +177,7 @@ final class Auth
         return Channel::redeem($code, $transport, $address);
     }
 
-    /**
-     * Which messages a user wants, and when.
-     *
-     * notify_time is NULL when they have not chosen one, which means the
-     * installation-wide JOB_TRIGGER_TIME applies.
-     */
+    /** Which messages a user wants, and when. */
     public static function settings(array $user): array
     {
         return [
@@ -193,13 +188,13 @@ final class Auth
         ];
     }
 
-    /** 'HH:MM', falling back to the installation default. */
+    /**
+     * 'HH:MM'. Every account carries its own; the column has a default, so
+     * there is no installation-wide setting to fall back to.
+     */
     public static function notifyTime(array $user): string
     {
         $time = trim((string)($user['notify_time'] ?? ''));
-        if ($time === '') {
-            $time = (string)Env::get('JOB_TRIGGER_TIME', '12:15');
-        }
 
         return preg_match('/^(\d{1,2}):(\d{2})/', $time, $m) === 1
             ? sprintf('%02d:%02d', min(23, (int)$m[1]), min(59, (int)$m[2]))
@@ -210,14 +205,16 @@ final class Auth
     {
         // Seconds are optional: <input type="time"> posts 'HH:MM' in most
         // browsers but 'HH:MM:SS' in some, and rejecting the longer form threw
-        // the chosen time away and silently fell back to JOB_TRIGGER_TIME -
-        // which reads as "it did not save" with nothing to show why.
+        // the chosen time away, which reads as "it did not save" with nothing
+        // to show why. An unusable value keeps whatever is already stored
+        // rather than resetting the account to the default.
         $time = preg_match('/^(\d{1,2}):(\d{2})(?::\d{2})?$/', trim($time), $m) === 1
             ? sprintf('%02d:%02d:00', min(23, (int)$m[1]), min(59, (int)$m[2]))
             : null;
 
         $statement = Db::conn()->prepare(
-            'UPDATE users SET notify_zero = ?, notify_daily = ?, notify_monthly = ?, notify_time = ?
+            'UPDATE users SET notify_zero = ?, notify_daily = ?, notify_monthly = ?,
+                 notify_time = COALESCE(?, notify_time)
              WHERE id = ?'
         );
         $statement->execute([(int)$zero, (int)$daily, (int)$monthly, $time, $userId]);
