@@ -836,7 +836,12 @@ function runCheck(): int
 
     // Nothing sends unless job.php is actually being run, and a scheduler that
     // was never set up looks exactly like a quiet day from in here.
-    if (Db::isInstalled() && Db::isCurrent()) {
+    //
+    // Deliberately not gated on the schema being current: job_runs is old
+    // enough to read either way, and "is cron firing" is most worth answering
+    // when something else is also wrong. Withholding it there would send
+    // somebody to look at their scheduler for a fault that is not in it.
+    if (Db::isInstalled()) {
         $lastRun = Db::conn()->query(
             "SELECT ran_at FROM job_runs WHERE job_key = 'heartbeat'"
         )->fetchColumn();

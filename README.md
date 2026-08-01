@@ -498,7 +498,15 @@ one rather than the web one.
 
 Check it is actually running with `php setup.php check`, which reports when the
 job last ran - a scheduler that was never configured otherwise looks exactly
-like a quiet day.
+like a quiet day. The heartbeat behind that is written at the start of a run,
+not the end, so a job that fires and then exits on a stale schema still shows
+as running: that is a working cron entry with a different fault behind it, and
+reporting it as "never ran" points at the wrong thing.
+
+Run it by hand as `php job.php -v`. Not `php -f job.php -v` - PHP takes the
+trailing `-v` as its own option, prints its version and never runs the script,
+which looks like a job that did nothing. `php -f job.php -- -v` works, but
+there is no reason to use `-f` at all.
 
 What it sends is decided per user in the notification settings above. For each
 account whose chosen time has passed today it considers:

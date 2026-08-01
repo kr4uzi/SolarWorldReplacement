@@ -62,6 +62,20 @@ if (!Db::isInstalled()) {
     exit(1);
 }
 
+// Record that the scheduler fired, before anything else can go wrong.
+//
+// This answers one question only - "is something actually calling this script"
+// - so it is written as early as it can be, rather than at the end of a
+// successful run. A job that starts and then exits on the schema check is a
+// working cron entry with a fixable problem behind it; reporting that as "has
+// never run" sends you looking at the scheduler, which is the wrong place.
+//
+// Not on a dry run: those are typed by hand, and letting one count would make
+// a dead scheduler look alive for the next hour.
+if (!$dryRun) {
+    markSent('heartbeat');
+}
+
 if (!Db::isCurrent()) {
     fwrite(STDERR, "Schema is out of date (" . implode(', ', array_keys(Db::pending()))
         . "). Run: php setup.php init\n");
@@ -215,18 +229,6 @@ if ($verbose && !$loggerOffline && !$noProduction) {
 }
 
 // --- Housekeeping -----------------------------------------------------------
-
-// Record that the job ran at all, even when it had nothing to send. Not on a
-// dry run: those are typed by hand, and letting one count would make a dead
-// scheduler look alive for the next hour.
-//
-// Without this there is no way to tell a scheduler that was never configured
-// from a day where nothing needed sending: both look like an empty job_runs
-// table and a chat that stays quiet. 'check' reports it, which turns "my daily
-// report never arrived" into a one-line answer.
-if (!$dryRun) {
-    markSent('heartbeat');
-}
 
 $purged = Auth::purgeExpiredTokens();
 if ($purged > 0 && $verbose) {
