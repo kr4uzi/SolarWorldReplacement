@@ -84,6 +84,68 @@ function contactOf(array $user): string
         : '(no channel)';
 }
 
+/**
+ * What the job has actually sent, newest first.
+ *
+ * The key says which message and which appointment it was for; ran_at says
+ * when it really went out. Those differ whenever something was owed and could
+ * not be delivered at the time - a missed cron tick, a transport that was
+ * down, a setting changed after the fact - and that gap is exactly what makes
+ * a notification look like it arrived at the wrong time.
+ */
+function runSent(int $limit): int
+{
+    if (!Db::isInstalled()) {
+        fail('Schema is missing. Run: php setup.php init');
+    }
+
+    $rows = Db::conn()->query(
+        "SELECT job_key, ran_at FROM job_runs WHERE job_key <> 'heartbeat'
+         ORDER BY ran_at DESC LIMIT " . max(1, $limit)
+    )->fetchAll();
+
+    if ($rows === []) {
+        echo "Nothing sent yet.\n";
+        return 0;
+    }
+
+    $names = [];
+    foreach (Auth::activeUsers() as $user) {
+        $names[(int)$user['id']] = $user['name'];
+    }
+
+    printf("%-19s  %-12s  %-8s  %-20s  %s\n", 'SENT AT', 'MESSAGE', 'DUE AT', 'PERIOD', 'USER');
+
+    foreach ($rows as $row) {
+        // daily-2026-08-01@12:15#3
+        preg_match('/^([a-z-]+?)-([\d-]+(?:W\d+)?)@(\d{2}:\d{2})#(\d+)$/', (string)$row['job_key'], $m);
+
+        if ($m === []) {
+            printf("%-19s  %s\n", $row['ran_at'], $row['job_key']);
+            continue;
+        }
+
+        [, $kind, $period, $due, $userId] = $m;
+        $late = date('H:i', (int)strtotime((string)$row['ran_at'])) === $due ? '' : '  <- later than due';
+
+        printf(
+            "%-19s  %-12s  %-8s  %-20s  %s%s\n",
+            $row['ran_at'],
+            $kind,
+            $due,
+            $period,
+            $names[(int)$userId] ?? "(deleted user {$userId})",
+            $late
+        );
+    }
+
+    echo "\nA message sent later than it was due was owed and could not be delivered\n";
+    echo "earlier - a missed run, a transport that was down, or a setting changed\n";
+    echo "after the day's message had already gone.\n";
+
+    return 0;
+}
+
 /** Everything a user can be reached on, including invites not yet opened. */
 /**
  * Fold duplicate accounts into one.
@@ -381,6 +443,7 @@ function usage(): void
 
     {$adding}
       php setup.php list                       list users
+      php setup.php sent [n]                   what the job sent, and when
       php setup.php channels [name|id]         list where users are reached
       php setup.php channel-priority <id> <n>  reorder a channel (lower goes first)
       php setup.php channel-remove <id>        drop one way of reaching someone
@@ -1027,6 +1090,9 @@ switch ($command) {
             }
         }
         exit(mergeUsers((int)$argv[2], $folds, in_array('--apply', $argv, true)));
+
+    case 'sent':
+        exit(runSent((int)($argv[2] ?? 20)));
 
     case 'channels':
         exit(runChannels($argv[2] ?? ''));

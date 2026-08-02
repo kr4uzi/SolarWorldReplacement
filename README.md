@@ -523,6 +523,12 @@ there is no reason to use `-f` at all.
 | `--dry-run` | work out what would be sent and send nothing |
 | `--force` | send even what has already gone out today |
 
+`php setup.php sent` lists what actually went out and when, against the time it
+was due. A message delivered later than its appointment was owed and could not
+be sent earlier - a missed run, a transport that was down, or a setting changed
+after that day's message had already gone. That gap is the usual reason a
+notification looks like it arrived at the wrong time.
+
 `--force` exists for trying settings out. Each report goes once per period by
 design, so after changing a switch the job would otherwise have nothing to do
 until tomorrow - and with `-v` it now says so (`already sent`) rather than
