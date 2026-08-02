@@ -565,14 +565,23 @@ features:
 
 | Report | When | Job key |
 |---|---|---|
-| Yesterday in full, then today so far | daily | `daily-2026-08-01` |
+| Yesterday in full, then today so far | every day | `daily-2026-08-01` |
 | The last seven days, with a chart | Sundays | `weekly-2026-W31` |
-| The month that just ended, with a chart | in the new month | `summary-2026-07` |
+| The month that just ended, with a chart | the 1st | `summary-2026-07` |
 
 The daily report starts at the beginning of *yesterday* rather than at
 midnight. Covering only "today" made it worth less the earlier it arrived - at
 08:00 it says almost nothing - and the day it described was never reported
 whole, because by the time that day was complete the report had moved on.
+
+**A report is owed from the reader's time until midnight, and no longer.** From
+that time until the end of the day is generous - it covers a missed tick, an
+hourly cron, a transport having a bad afternoon - but a report that could not
+be sent on its own day is not sent at all. Owing it until it had actually gone
+out sounded kinder and behaved badly: a monthly report could arrive on the
+20th, and any change to the shape of a job key re-sent everything still
+outstanding, weeks after the fact. A report a day late is worth less than none;
+one three weeks late is just confusing.
 
 The period is part of the key, which is what makes "send once" mean once a day,
 once a week or once a month with no further bookkeeping. So is the time the

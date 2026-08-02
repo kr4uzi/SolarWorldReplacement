@@ -20,11 +20,11 @@ declare(strict_types=1);
  * at, which is the only reason this ever needed two schedules.
  *
  * Everything else is a no-op, so most of the 96 daily runs do nothing but
- * check the clock. The frequent cadence buys resilience rather than freshness:
- * a message missed because the host was down, or because the tick before the
- * user's time was the last one to run, still goes out on a later run. What has
+ * check the clock. The frequent cadence buys resilience: a message missed
+ * because the host was down, or because the tick before the user's time was
+ * the last one to run, still goes out on a later run the same day. What has
  * already been sent is recorded in job_runs rather than inferred from the
- * clock, so nothing is sent twice and nothing is lost by being late.
+ * clock, so nothing is sent twice - and nothing outlives the day it was for.
  *
  * Delivery is tracked per user, so someone unreachable is retried on the next
  * run without re-sending to everyone who already received the message. The
@@ -195,15 +195,24 @@ function isDue(array $user): bool
  */
 function plantAlert(array $today): ?array
 {
-    $total = array_sum($today['wh']);
+    // Judged on the best figure available for today, not on min_day.js alone.
+    // Loggers differ in when they roll that file over, and one that has
+    // already cleared it for the evening would otherwise read as a plant that
+    // produced nothing - the same "no data means no production" mistake this
+    // alert has made once already. sumRange() prefers days.csv where the
+    // logger has written today's row and falls back to the live figures.
+    $range   = Data::sumRange((int)strtotime('today'), (int)strtotime('today 23:59:59'));
+    $perUnit = $range['per_inverter'];
+    $total   = $range['total'];
+
     if ($total <= 0) {
         return ['zeroday', Messages::noProduction($today)];
     }
 
     // One inverter dead among several: the total stays healthy and nothing
     // looks wrong, while that string earns nothing until somebody notices.
-    $dead = array_filter($today['wh'], static fn($wh) => $wh <= 0);
-    if ($dead !== [] && count($dead) < count($today['wh'])) {
+    $dead = array_filter($perUnit, static fn($wh) => $wh <= 0);
+    if ($dead !== [] && count($dead) < count($perUnit)) {
         return ['inverter-' . implode('-', array_keys($dead)), Messages::inverterDown($dead, $total)];
     }
 
@@ -240,20 +249,19 @@ function reportsDue(): array
         ];
     }
 
-    // The month that just ended. Owed for the whole of the new month rather
-    // than its first days: job_runs records it once it has gone out, so there
-    // is nothing to bound, and a window would only decide how long an outage
-    // may last before the report is lost.
-    $first = strtotime('first day of last month');
-    $month = (int)date('n', $first);
-    $year  = (int)date('Y', $first);
+    // The month that just ended, on the first of the new one.
+    if ((int)date('j') === 1) {
+        $first = strtotime('first day of last month');
+        $month = (int)date('n', $first);
+        $year  = (int)date('Y', $first);
 
-    $due[] = [
-        'monthly',
-        sprintf('summary-%04d-%02d', $year, $month),
-        static fn() => Messages::monthlySummary($month, $year),
-        static fn() => Chart::month($month, $year),
-    ];
+        $due[] = [
+            'monthly',
+            sprintf('summary-%04d-%02d', $year, $month),
+            static fn() => Messages::monthlySummary($month, $year),
+            static fn() => Chart::month($month, $year),
+        ];
+    }
 
     return $due;
 }
@@ -268,8 +276,16 @@ $alert = plantAlert($today);
 
 $reports = reportsDue();
 if ($verbose) {
-    say('Reports in play today: ' . implode(', ', array_column($reports, 0))
-        . ((int)date('N') === 7 ? '' : ' (weekly only on Sundays)'));
+    $absent = [];
+    if ((int)date('N') !== 7) {
+        $absent[] = 'weekly is Sundays only';
+    }
+    if ((int)date('j') !== 1) {
+        $absent[] = 'monthly is the 1st only';
+    }
+
+    say('Reports due today: ' . implode(', ', array_column($reports, 0))
+        . ($absent === [] ? '' : ' (' . implode('; ', $absent) . ')'));
 }
 $charts  = [];   // drawn at most once per run, on the first user who is owed one
 
@@ -327,8 +343,9 @@ foreach ($users as $user) {
 }
 
 if ($verbose) {
+    $known = Data::sumRange((int)strtotime('today'), (int)strtotime('today 23:59:59'))['total'];
     say($alert === null
-        ? 'Plant OK: ' . Messages::kwh(array_sum($today['wh'])) . ' by ' . date('H:i')
+        ? 'Plant OK: ' . Messages::kwh($known) . ' by ' . date('H:i')
         : 'Plant fault: ' . $alert[0]);
 }
 
